@@ -1,0 +1,27 @@
+name: Gemini Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # 必须赋予写权限才能发表评论
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取完整历史以对比差异
+
+      - name: Gemini Code Review
+        # 这里使用社区维护的优秀 Action，例如：
+        uses: haritamarwaha/gemini-review-action@v1
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          model: "gemini-3-flash-preview" # flash 模型速度快且成本低
+          level: "MEDIUM" # 设为简明模式，避免废话
