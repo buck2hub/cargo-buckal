@@ -37,8 +37,9 @@ jobs:
           pip install -r requirements.txt
           
       - name: Execute Review Script
+        if: env.GEMINI_API_KEY != ''
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}  # Ensure the secret is defined in repo settings
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO_NAME: ${{ github.repository }}
