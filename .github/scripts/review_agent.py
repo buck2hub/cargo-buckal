@@ -3,6 +3,11 @@ import json
 import logging
 
 from typing import List
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 from google import genai
 from google.genai import types

@@ -4,3 +4,4 @@ requests
 PyGithub
 pydantic
 tenacity
+python-dotenv
