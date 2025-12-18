@@ -1,116 +1,47 @@
-name: Gemini 3 Code Reviewer
+name: Gemini AI Code Review
 
 on:
-  # 建议使用 pull_request。如果是公开仓库且需要支持 Fork 的 PR，请改用 pull_request_target (注意安全)
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '**/*.lock'
+
+permissions:
+  contents: read
+  pull-requests: write
+  discussions: read
 
 jobs:
-  review:
+  ai_review:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-
+    name: "Gemini Code Auditor"
+    
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 获取所有历史以进行分支对比
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+          fetch-depth: 0
+          
+      - name: Setup Python Environment
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
-
-      - name: Install Gemini SDK
+          python-version: '3.11'
+          cache: 'pip'
+          
+      - name: Install Dependencies
         run: |
-          pip install google-genai
-
-      - name: Gemini AI Review
+          pip install --upgrade pip
+          pip install google-generativeai unidiff requests PyGithub pydantic tenacity
+          
+      - name: Execute Review Script
         env:
-          # 这里的名称必须与你 Settings -> Secrets 里的名字完全一致
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}  # Ensure the secret is defined in repo settings
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          python - <<EOF
-          import os
-          import sys
-          import json
-          import subprocess
-          import urllib.request
-          from google import genai
-          from google.genai import types
-
-          # 1. 验证环境变量
-          api_key = os.getenv('GEMINI_API_KEY')
-          if not api_key:
-              print("::error::GEMINI_API_KEY is missing! Please check your GitHub Secrets.")
-              sys.exit(1)
-
-          # 2. 获取 Git Diff (对比 PR 分支与目标基准分支)
-          try:
-              # 首先确保 fetch 了基准分支
-              subprocess.run(['git', 'fetch', 'origin', os.environ['BASE_REF']], check=True)
-              # 获取差异内容
-              diff_cmd = ['git', 'diff', f'origin/{os.environ["BASE_REF"]}...HEAD']
-              diff_text = subprocess.check_output(diff_cmd).decode('utf-8')
-          except Exception as e:
-              print(f"::error::Failed to get git diff: {e}")
-              sys.exit(1)
-
-          if not diff_text.strip():
-              print("No code changes detected in this PR.")
-              sys.exit(0)
-
-          # 3. 初始化 Gemini 3 客户端
-          client = genai.Client(api_key=api_key)
-
-          prompt = (
-              "你是一位资深软件架构师和代码评审专家。请分析以下 Pull Request 的代码改动（Diff格式），"
-              "指出其中潜在的逻辑错误、性能隐患、安全问题或不符合最佳实践的地方。"
-              "请使用英文回复，输出格式请保持简洁。如果代码质量很高，请给予简单的肯定。"
-              "\n\n--- 代码 Diff 开始 ---\n"
-              f"{diff_text}"
-          )
-
-          # 4. 调用 Gemini 3 Flash Preview
-          try:
-              print("Calling Gemini 3 Flash Preview API...")
-              response = client.models.generate_content(
-                  model="gemini-3-flash-preview",
-                  contents=prompt,
-                  config=types.GenerateContentConfig(
-                      thinking_config=types.ThinkingConfig(
-                          thinking_level="MEDIUM" # 适合 Code Review 的平衡模式
-                      )
-                  )
-              )
-              review_comment = response.text
-          except Exception as e:
-              print(f"::error::Gemini API call failed: {e}")
-              sys.exit(1)
-
-          # 5. 发表 GitHub 评论
-          try:
-              comment_url = f"https://api.github.com/repos/{os.environ['REPO']}/issues/{os.environ['PR_NUMBER']}/comments"
-              body = f"### 🤖 Gemini 3 AI Code Review\n\n{review_comment}"
-              
-              data = json.dumps({"body": body}).encode('utf-8')
-              req = urllib.request.Request(comment_url, data=data, method='POST')
-              req.add_header('Authorization', f'token {os.environ["GITHUB_TOKEN"]}')
-              req.add_header('Content-Type', 'application/json')
-              req.add_header('User-Agent', 'Gemini-Review-Action')
-
-              with urllib.request.urlopen(req) as f:
-                  if f.status == 201:
-                      print("Successfully posted review comment.")
-                  else:
-                      print(f"Failed to post comment. Status: {f.status}")
-          except Exception as e:
-              print(f"::error::Failed to post GitHub comment: {e}")
-              sys.exit(1)
-          EOF
+          REPO_NAME: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python.github/scripts/review_agent.py
