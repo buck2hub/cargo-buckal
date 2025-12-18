@@ -1,7 +1,7 @@
 name: Gemini AI Code Review
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
     paths-ignore:
       - '*.md'
@@ -12,7 +12,8 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  discussions: read
+  id-token: write
+  repository-projects: read
 
 jobs:
   ai_review:
