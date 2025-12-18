@@ -1,4 +1,4 @@
-name: Gemini Code Review
+name: Gemini 3 Code Review
 
 on:
   pull_request:
@@ -9,19 +9,68 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write # 必须赋予写权限才能发表评论
+      pull-requests: write
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 获取完整历史以对比差异
+          fetch-depth: 2 # 获取当前提交和父提交以计算 Diff
 
-      - name: Gemini Code Review
-        # 这里使用社区维护的优秀 Action，例如：
-        uses: haritamarwaha/gemini-review-action@v1
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          model: "gemini-3-flash-preview" # flash 模型速度快且成本低
-          level: "MEDIUM" # 设为简明模式，避免废话
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install google-genai
+
+      - name: Run Gemini Review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          python - <<EOF
+          import os
+          from google import genai
+          from google.genai import types
+          import subprocess
+
+          # 1. 获取 PR 的 Diff 内容
+          diff = subprocess.check_output(['git', 'diff', 'HEAD^', 'HEAD']).decode('utf-8')
+          if not diff:
+              print("No changes detected.")
+              exit(0)
+
+          # 2. 初始化 Gemini 客户端 (使用最新 SDK)
+          client = genai.Client(api_key=os.environ['GEMINI_API_KEY'])
+          
+          prompt = f"你是一位资深代码审查专家。请评审以下代码改动，指出潜在的 Bug、性能问题或改进建议。请用中文回答，并直接给出具体的修改建议。\n\n代码 Diff:\n{diff}"
+
+          # 3. 调用 Gemini 3 Flash Preview 并设置 Thinking Level
+          response = client.models.generate_content(
+              model="gemini-3-flash-preview",
+              contents=prompt,
+              config=types.GenerateContentConfig(
+                  thinking_config=types.ThinkingConfig(
+                      thinking_level="MEDIUM" # 推荐在 Review 中使用 MEDIUM 或 HIGH
+                  )
+              )
+          )
+
+          # 4. 将结果作为评论发表到 GitHub PR
+          import json
+          import urllib.request
+
+          comment_url = f"https://api.github.com/repos/{os.environ['REPO']}/issues/{os.environ['PR_NUMBER']}/comments"
+          data = json.dumps({"body": response.text}).encode('utf-8')
+          req = urllib.request.Request(comment_url, data=data, method='POST')
+          req.add_header('Authorization', f'token {os.environ["GITHUB_TOKEN"]}')
+          req.add_header('Content-Type', 'application/json')
+          
+          with urllib.request.urlopen(req) as f:
+              print(f"Comment posted. Status: {f.status}")
+          EOF
