@@ -51,18 +51,18 @@ def parse_and_filter_diff(file_list):
         # Construct a complete diff format (required by unidiff) because file.patch often lacks headers
         diff_content = f"--- a/{file.filename}\n+++ b/{file.filename}\n{file.patch}"
         patch = PatchSet(diff_content)
-        file_context = f"File: {file.filename}\n"
-        
-        for hunk in patch:
-            file_context += f"Hunk at line {hunk.source_start}:\n"
-            for line in hunk:
-                # Only send added lines to AI for focused review, while preserving context lines
-                prefix = "+" if line.is_added else ("-" if line.is_removed else " ")
-                # Explicitly mark target line numbers in the prompt to prevent hallucinations
-                line_marker = f"[Line {line.target_line_no}]" if not line.is_removed else ""
-                file_context += f"{prefix} {line_marker} {line.value}"
-        
-        prompt_context += file_context + "\n---\n"
+        for patched_file in patch:
+            file_context = f"File: {patched_file.path}\n"
+            for hunk in patched_file:
+                file_context += f"Hunk at line {hunk.source_start}:\n"
+                for line in hunk:
+                    # Only send added lines to AI for focused review, while preserving context lines
+                    prefix = "+" if line.is_added else ("-" if line.is_removed else " ")
+                    # Explicitly mark target line numbers in the prompt to prevent hallucinations
+                    line_marker = f"[Line {line.target_line_no}]" if not line.is_removed else ""
+                    file_context += f"{prefix} {line_marker} {line.value}"
+            
+            prompt_context += file_context + "\n---\n"
         valid_files.append(file.filename)
         
     return prompt_context
