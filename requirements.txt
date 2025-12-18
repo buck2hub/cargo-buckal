@@ -1,0 +1,6 @@
+google-generativeai
+unidiff
+requests
+PyGithub
+pydantic
+tenacity
