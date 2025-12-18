@@ -6,7 +6,7 @@ from typing import List
 
 from google import genai
 from google.genai import types
-from github import Github, GithubException
+from github import Github, GithubException, Auth
 from unidiff import PatchSet
 from pydantic import BaseModel
 
@@ -48,7 +48,9 @@ def parse_and_filter_diff(file_list):
         if file.status == "removed" or file.filename.endswith(('.md', '.lock')):
             continue
             
-        patch = PatchSet(file.patch)
+        # Construct a complete diff format (required by unidiff) because file.patch often lacks headers
+        diff_content = f"--- a/{file.filename}\n+++ b/{file.filename}\n{file.patch}"
+        patch = PatchSet(diff_content)
         file_context = f"File: {file.filename}\n"
         
         for hunk in patch:
@@ -135,7 +137,8 @@ if __name__ == "__main__":
         logger.error("GITHUB_TOKEN not found in environment variables")
         exit(1)
         
-    g = Github(github_token)
+    auth = Auth.Token(github_token)
+    g = Github(auth=auth)
     
     repo_name = os.environ.get("REPO_NAME")
     if not repo_name:
