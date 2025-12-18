@@ -34,7 +34,7 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install --upgrade pip
-          pip install google-generativeai unidiff requests PyGithub pydantic tenacity
+          pip install -r requirements.txt
           
       - name: Execute Review Script
         env:
@@ -44,4 +44,4 @@ jobs:
           REPO_NAME: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python.github/scripts/review_agent.py
+        run: python .github/scripts/review_agent.py
