@@ -1,7 +1,0 @@
-google-genai
-unidiff
-requests
-PyGithub
-pydantic
-tenacity
-python-dotenv
