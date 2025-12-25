@@ -16,41 +16,22 @@ pub enum Commands {
 
 #[derive(Parser, Debug)]
 pub struct BuckalArgs {
-    /// Use verbose output
     #[command(subcommand)]
     pub subcommands: BuckalSubCommands,
 }
 
 #[derive(Parser, Debug)]
 pub enum BuckalSubCommands {
-    /// Add dependencies to a manifest file
     Add(crate::commands::add::AddArgs),
-
-    /// Automatically remove unused dependencies
     Autoremove(crate::commands::autoremove::AutoremoveArgs),
-
-    /// Compile the current package
     Build(crate::commands::build::BuildArgs),
-
-    /// Clean up the buck-out directory
     Clean(crate::commands::clean::CleanArgs),
-
-    /// Create a new package in an existing directory
     Init(crate::commands::init::InitArgs),
-
-    /// Migrate existing Cargo packages to Buck2
     Migrate(crate::commands::migrate::MigrateArgs),
-
-    /// Create a new package
     New(crate::commands::new::NewArgs),
-
-    /// Remove dependencies from a manifest file
     Remove(crate::commands::remove::RemoveArgs),
-
-    /// Update dependencies in a manifest file
+    Test(Box<crate::commands::test::TestArgs>),
     Update(crate::commands::update::UpdateArgs),
-
-    /// Print version information
     Version(crate::commands::version::VersionArgs),
 }
 
@@ -66,6 +47,7 @@ impl Cli {
                 BuckalSubCommands::Migrate(args) => crate::commands::migrate::execute(args),
                 BuckalSubCommands::New(args) => crate::commands::new::execute(args),
                 BuckalSubCommands::Remove(args) => crate::commands::remove::execute(args),
+                BuckalSubCommands::Test(args) => crate::commands::test::execute(args),
                 BuckalSubCommands::Update(args) => crate::commands::update::execute(args),
                 BuckalSubCommands::Version(args) => crate::commands::version::execute(args),
             },
