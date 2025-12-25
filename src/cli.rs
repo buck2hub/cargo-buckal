@@ -22,16 +22,37 @@ pub struct BuckalArgs {
 
 #[derive(Parser, Debug)]
 pub enum BuckalSubCommands {
+    /// Add dependencies to a manifest file
     Add(crate::commands::add::AddArgs),
+
+    /// Automatically remove unused dependencies
     Autoremove(crate::commands::autoremove::AutoremoveArgs),
+
+    /// Compile the current package
     Build(crate::commands::build::BuildArgs),
+
+    /// Clean up the buck-out directory
     Clean(crate::commands::clean::CleanArgs),
+
+    /// Create a new package in an existing directory
     Init(crate::commands::init::InitArgs),
+
+    /// Migrate existing Cargo packages to Buck2
     Migrate(crate::commands::migrate::MigrateArgs),
+
+    /// Create a new package
     New(crate::commands::new::NewArgs),
+
+    /// Remove dependencies from a manifest file
     Remove(crate::commands::remove::RemoveArgs),
+
+    /// Execute the tests of a local package
     Test(Box<crate::commands::test::TestArgs>),
+
+    /// Update dependencies in a manifest file
     Update(crate::commands::update::UpdateArgs),
+
+    /// Print version information
     Version(crate::commands::version::VersionArgs),
 }
 
