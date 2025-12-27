@@ -122,7 +122,7 @@ pub struct TestArgs {
     #[arg(long)]
     pub frozen: bool,
 
-    /// The name of the test to run
+    /// The name of the test to run (positional argument)
     #[arg(value_name = "TESTNAME")]
     pub test_name: Option<String>,
 
@@ -138,7 +138,15 @@ pub fn execute(args: &TestArgs) {
     check_buck2_package().unwrap_or_exit();
 
     // Fetch cargo metadata to understand the project structure
-    let metadata = MetadataCommand::new()
+    let mut meta_cmd = MetadataCommand::new();
+    if let Some(path) = &args.manifest_path {
+        meta_cmd.manifest_path(path);
+    }
+    if args.offline {
+        meta_cmd.other_options(vec!["--offline".to_string()]);
+    }
+
+    let metadata = meta_cmd
         .exec()
         .context("Failed to fetch cargo metadata")
         .unwrap_or_exit();
@@ -173,14 +181,14 @@ pub fn execute(args: &TestArgs) {
             .iter()
             .find(|p| p.name.as_str() == excluded_pkg)
         {
-            let pkg_path = pkg.manifest_path.parent().unwrap();
+            let pkg_path = pkg
+                .manifest_path
+                .parent()
+                .ok_or_else(|| anyhow!("Package {} manifest has no parent directory", excluded_pkg))
+                .unwrap_or_exit();
+
             let relative = pkg_path.strip_prefix(&buck2_root).unwrap_or_exit();
-            let rel_str = relative.as_str().trim_start_matches('/');
-            let pattern = if rel_str.is_empty() {
-                "//...".to_string()
-            } else {
-                format!("//{}/...", rel_str)
-            };
+            let pattern = format_buck2_pattern(relative.as_str());
             cmd = cmd.arg("--exclude").arg(pattern);
         }
     }
@@ -215,7 +223,7 @@ pub fn execute(args: &TestArgs) {
         passthrough_args.extend_from_slice(&args.args);
 
         if !passthrough_args.is_empty() {
-            cmd = cmd.arg("--").arg("--");
+            cmd = cmd.arg("--");
             for arg in passthrough_args {
                 cmd = cmd.arg(arg);
             }
@@ -229,7 +237,6 @@ pub fn execute(args: &TestArgs) {
     }
 }
 
-/// Resolves the list of Buck2 target labels based on the provided cargo-style arguments.
 #[allow(clippy::collapsible_if)]
 fn resolve_targets(
     args: &TestArgs,
@@ -238,17 +245,16 @@ fn resolve_targets(
 ) -> Result<(Vec<String>, bool)> {
     let mut patterns = Vec::new();
 
-    // Strategy : Handle positional `test_name` argument (e.g., `cargo buckal test my_test`)
+    // Handle positional `test_name` argument (e.g., `cargo buckal test my_test`)
     if let Some(name) = &args.test_name {
-        let name_norm = name.replace("-", "_");
+        let name_norm = name.replace('-', "_");
         let mut found_in_metadata = false;
 
-        // Try to match against targets defined in Cargo.toml
         for pkg in &metadata.packages {
             for target in &pkg.targets {
                 let file_stem = target.src_path.file_stem().unwrap_or("");
-                let target_name_norm = target.name.replace("-", "_");
-                let file_stem_norm = file_stem.replace("-", "_");
+                let target_name_norm = target.name.replace('-', "_");
+                let file_stem_norm = file_stem.replace('-', "_");
 
                 if (target_name_norm == name_norm || file_stem_norm == name_norm)
                     && target.kind.iter().any(|k| k.to_string() == "test")
@@ -276,7 +282,7 @@ fn resolve_targets(
         }
     }
 
-    // Strategy : Handle explicit `--test` arguments
+    // Handle explicit `--test` arguments
     if !args.test.is_empty() {
         for t_name in &args.test {
             let mut found_local = false;
@@ -309,8 +315,7 @@ fn resolve_targets(
         }
     }
 
-    // Strategy : Default behavior (no specific test name provided)
-    // Run all tests in workspace, specific package, or current directory.
+    // Default behavior (no specific test name provided)
     if args.workspace {
         patterns.push("//...".to_string());
     } else if !args.package.is_empty() {
@@ -320,16 +325,15 @@ fn resolve_targets(
                 .iter()
                 .find(|p| p.name.as_str() == pkg_name)
             {
-                let pkg_path = pkg.manifest_path.parent().unwrap();
+                let pkg_path = pkg.manifest_path.parent().ok_or_else(|| {
+                    anyhow!("Package {} manifest has no parent directory", pkg_name)
+                })?;
+
                 let relative = pkg_path
                     .strip_prefix(buck2_root)
                     .map_err(|_| anyhow!("Package {} outside root", pkg_name))?;
-                let rel_str = relative.as_str().trim_start_matches('/');
-                patterns.push(if rel_str.is_empty() {
-                    "//...".to_string()
-                } else {
-                    format!("//{}/...", rel_str)
-                });
+
+                patterns.push(format_buck2_pattern(relative.as_str()));
             }
         }
     } else {
@@ -338,15 +342,21 @@ fn resolve_targets(
         let relative = current_dir
             .strip_prefix(buck2_root.as_std_path())
             .map_err(|_| anyhow!("Outside project"))?;
-        let rel_str = relative.to_str().unwrap().trim_start_matches('/');
-        patterns.push(if rel_str.is_empty() {
-            "//...".to_string()
-        } else {
-            format!("//{}/...", rel_str)
-        });
+
+        patterns.push(format_buck2_pattern(relative.to_str().unwrap()));
     }
 
     Ok((patterns, false))
+}
+
+// Helper to format Buck2 patterns (e.g., //path/... or //...)
+fn format_buck2_pattern(rel_path: &str) -> String {
+    let trimmed = rel_path.trim_start_matches('/');
+    if trimmed.is_empty() {
+        "//...".to_string()
+    } else {
+        format!("//{}/...", trimmed)
+    }
 }
 
 // Wrapper for Utf8Path support
@@ -375,7 +385,13 @@ fn query_buck2_test_owner_std(
         .context("Failed to run buck2 uquery")?;
 
     if !output.status.success() {
-        return Err(anyhow!("buck2 uquery failed"));
+        // Optimization: Include stderr in error message (Copilot feedback)
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!(
+            "buck2 uquery failed for query `{}`: {}",
+            query_expr,
+            stderr.trim()
+        ));
     }
 
     let stdout = String::from_utf8(output.stdout)?;
@@ -383,7 +399,7 @@ fn query_buck2_test_owner_std(
     let owner = stdout
         .lines()
         .next()
-        .ok_or_else(|| anyhow!("No test owner found"))?;
+        .ok_or_else(|| anyhow!("No Buck2 test rule found that owns file '{}'", rel_str))?;
     Ok(owner.trim().to_string())
 }
 
