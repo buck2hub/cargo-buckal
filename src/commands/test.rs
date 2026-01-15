@@ -9,89 +9,68 @@ use std::process::exit;
 
 #[derive(Parser, Debug)]
 pub struct TestArgs {
-    /// Package to run tests for
     #[arg(short, long, value_name = "SPEC")]
     pub package: Vec<String>,
 
-    /// Test all packages in the workspace
     #[arg(long)]
     pub workspace: bool,
 
-    /// Exclude packages from the test
     #[arg(long, value_name = "SPEC")]
     pub exclude: Vec<String>,
 
-    /// Test all targets
     #[arg(long)]
     pub all_targets: bool,
 
-    /// Test only this package's library
     #[arg(long)]
     pub lib: bool,
 
-    /// Test only the specified binary
     #[arg(long, value_name = "NAME")]
     pub bin: Vec<String>,
 
-    /// Test all binaries
     #[arg(long)]
     pub bins: bool,
 
-    /// Test only the specified example
     #[arg(long, value_name = "NAME")]
     pub example: Vec<String>,
 
-    /// Test all examples
     #[arg(long)]
     pub examples: bool,
 
-    /// Test only the specified test target
     #[arg(long, value_name = "NAME")]
     pub test: Vec<String>,
 
-    /// Test all tests
     #[arg(long)]
     pub tests: bool,
 
-    /// Compile, but don't run tests
     #[arg(long)]
     pub no_run: bool,
 
-    /// Run all tests regardless of failure
     #[arg(long)]
     pub no_fail_fast: bool,
 
-    /// Number of parallel jobs, defaults to # of CPUs
     #[arg(short, long, value_name = "N")]
     pub jobs: Option<usize>,
 
-    /// Build for the target triple
     #[arg(long, value_name = "TRIPLE")]
     pub target: Option<String>,
 
-    /// Build artifacts in release mode, with optimizations
     #[arg(short, long)]
     pub release: bool,
 
-    /// Build artifacts with the specified profile
     #[arg(long, value_name = "PROFILE-NAME")]
     pub profile: Option<String>,
 
-    /// The name of the test to run (positional argument)
     #[arg(value_name = "TESTNAME")]
     pub test_name: Option<String>,
 
-    /// Arguments for the test binary
     #[arg(last = true)]
     pub args: Vec<String>,
 }
 
 pub fn execute(args: &TestArgs) {
-    // Perform essential environment and package checks
     ensure_prerequisites().unwrap_or_exit();
     check_buck2_package().unwrap_or_exit();
 
-    // Fetch cargo metadata to analyze the project structure
     let metadata = MetadataCommand::new()
         .exec()
         .context("Failed to fetch cargo metadata")
@@ -99,8 +78,7 @@ pub fn execute(args: &TestArgs) {
 
     let buck2_root = get_buck2_root().unwrap_or_exit();
 
-    // Core logic: resolve the requested cargo targets to Buck2 target labels
-    let (targets, is_specific_target) = resolve_targets(args, &metadata, &buck2_root)
+    let (targets, _is_specific_target) = resolve_targets(args, &metadata, &buck2_root)
         .unwrap_or_exit_ctx("failed to resolve targets");
 
     if targets.is_empty() {
@@ -108,38 +86,16 @@ pub fn execute(args: &TestArgs) {
         return;
     }
 
-    // Initialize the command as 'build' for --no-run, otherwise 'test'
     let mut cmd = if args.no_run {
         Buck2Command::new().arg("build")
     } else {
         Buck2Command::new().arg("test")
     };
 
-    // Append resolved Buck2 targets to the command arguments
     for target in &targets {
         cmd = cmd.arg(target);
     }
 
-    // Apply package exclusions using the Buck2 --exclude flag
-    for excluded_pkg in &args.exclude {
-        if let Some(pkg) = metadata
-            .packages
-            .iter()
-            .find(|p| p.name.as_str() == excluded_pkg)
-        {
-            let pkg_path = pkg
-                .manifest_path
-                .parent()
-                .ok_or_else(|| anyhow!("Package {} manifest has no parent directory", excluded_pkg))
-                .unwrap_or_exit();
-
-            let relative = pkg_path.strip_prefix(&buck2_root).unwrap_or_exit();
-            let pattern = format_buck2_pattern(relative.as_str());
-            cmd = cmd.arg("--exclude").arg(pattern);
-        }
-    }
-
-    // Map common cargo CLI flags to their Buck2 equivalents
     if let Some(jobs) = args.jobs {
         cmd = cmd.arg("-j").arg(jobs.to_string());
     }
@@ -158,19 +114,19 @@ pub fn execute(args: &TestArgs) {
         cmd = cmd.arg("--keep-going");
     }
 
-    // Handle pass-through arguments directed at the underlying test runner
     if !args.no_run {
-        let mut passthrough_args = Vec::new();
-        // If a specific target wasn't already resolved, pass the name as a filter
-        if !is_specific_target && let Some(name) = &args.test_name {
-            passthrough_args.push(name.clone());
-        }
-        passthrough_args.extend_from_slice(&args.args);
+        let mut raw_args = Vec::new();
 
-        if !passthrough_args.is_empty() {
+        if let Some(name) = &args.test_name {
+            raw_args.push(name.clone());
+        }
+
+        raw_args.extend_from_slice(&args.args);
+
+        if !raw_args.is_empty() {
             cmd = cmd.arg("--");
-            for arg in passthrough_args {
-                cmd = cmd.arg(arg);
+            for arg in raw_args {
+                cmd = cmd.arg("--test-arg").arg(arg);
             }
         }
     }
@@ -182,7 +138,6 @@ pub fn execute(args: &TestArgs) {
     }
 }
 
-/// Resolves various cargo test flags into a list of Buck2 target labels.
 fn resolve_targets(
     args: &TestArgs,
     metadata: &cargo_metadata::Metadata,
@@ -191,7 +146,6 @@ fn resolve_targets(
     let mut patterns = Vec::new();
     let mut specific_found = false;
 
-    // Strategy 1: Positional argument matching (e.g., `cargo buckal test name`)
     if let Some(name) = &args.test_name {
         let name_norm = name.replace('-', "_");
         let mut found_in_metadata = false;
@@ -224,9 +178,15 @@ fn resolve_targets(
         } else {
             return Ok((patterns, true));
         }
+
+        if patterns.is_empty() {
+            return Err(anyhow!(
+                "error: no test target or source file found matching `{}`",
+                name
+            ));
+        }
     }
 
-    // Strategy 2: Explicit --test <NAME> arguments
     if !args.test.is_empty() {
         for t_name in &args.test {
             let mut found_local = false;
@@ -252,10 +212,13 @@ fn resolve_targets(
                     specific_found = true;
                 }
             }
+
+            if !found_local && !specific_found {
+                return Err(anyhow!("error: no test target named `{}`", t_name));
+            }
         }
     }
 
-    // Strategy 3: Selection by target kind (--lib, --bin, --example)
     let has_kind_selection =
         args.lib || args.bins || !args.bin.is_empty() || args.examples || !args.example.is_empty();
 
@@ -297,46 +260,83 @@ fn resolve_targets(
                 }
             }
         }
+
+        if !args.bin.is_empty() && !specific_found {
+            return Err(anyhow!("error: no bin target named `{}`", args.bin[0]));
+        }
+        if !args.example.is_empty() && !specific_found {
+            return Err(anyhow!(
+                "error: no example target named `{}`",
+                args.example[0]
+            ));
+        }
     }
 
     if specific_found && !patterns.is_empty() {
         return Ok((patterns, true));
     }
 
-    // Strategy 4: Fallback to general patterns (workspace, package, or directory)
-    if args.workspace {
-        patterns.push("//...".to_string());
-    } else if !args.package.is_empty() {
-        for pkg_name in &args.package {
-            if let Some(pkg) = metadata
-                .packages
-                .iter()
-                .find(|p| p.name.as_str() == pkg_name)
-            {
-                let pkg_path = pkg.manifest_path.parent().ok_or_else(|| {
-                    anyhow!("Package {} manifest has no parent directory", pkg_name)
-                })?;
+    if patterns.is_empty() {
+        let mut search_roots = Vec::new();
 
-                let relative = pkg_path
-                    .strip_prefix(buck2_root)
-                    .map_err(|_| anyhow!("Package {} outside root", pkg_name))?;
+        if args.workspace {
+            search_roots.push("//...".to_string());
+        } else if !args.package.is_empty() {
+            for pkg_name in &args.package {
+                if let Some(pkg) = metadata
+                    .packages
+                    .iter()
+                    .find(|p| p.name.as_str() == pkg_name)
+                {
+                    let pkg_path = pkg.manifest_path.parent().ok_or_else(|| {
+                        anyhow!("Package {} manifest has no parent directory", pkg_name)
+                    })?;
+                    let relative = pkg_path
+                        .strip_prefix(buck2_root)
+                        .map_err(|_| anyhow!("Package {} outside root", pkg_name))?;
+                    search_roots.push(format_buck2_pattern(relative.as_str()));
+                }
+            }
+        } else {
+            let current_dir = std::env::current_dir()?;
+            let relative = current_dir
+                .strip_prefix(buck2_root.as_std_path())
+                .map_err(|_| anyhow!("Current directory is outside project root"))?;
+            search_roots.push(format_buck2_pattern(relative.to_str().unwrap()));
+        }
 
-                patterns.push(format_buck2_pattern(relative.as_str()));
+        if !search_roots.is_empty() {
+            let root_expr = search_roots.join(" + ");
+            let query_expr = format!("kind(test, {})", root_expr);
+            let output = Buck2Command::new()
+                .arg("uquery")
+                .arg(&query_expr)
+                .output()
+                .context("Failed to run buck2 uquery for wildcard resolution")?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(anyhow!(
+                    "buck2 uquery failed to resolve wildcard targets: {}",
+                    stderr
+                ));
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let t = line.trim();
+                if !t.is_empty() {
+                    patterns.push(t.to_string());
+                }
             }
         }
-    } else {
-        let current_dir = std::env::current_dir()?;
-        let relative = current_dir
-            .strip_prefix(buck2_root.as_std_path())
-            .map_err(|_| anyhow!("Current directory is outside project root"))?;
-
-        patterns.push(format_buck2_pattern(relative.to_str().unwrap()));
     }
+
+    patterns.retain(|p| !p.contains("third-party"));
 
     Ok((patterns, false))
 }
 
-/// Helper to convert a relative path into a recursive Buck2 target pattern.
 fn format_buck2_pattern(rel_path: &str) -> String {
     let trimmed = rel_path.trim_start_matches('/');
     if trimmed.is_empty() {
@@ -346,7 +346,6 @@ fn format_buck2_pattern(rel_path: &str) -> String {
     }
 }
 
-/// Helper function to resolve the Buck2 owner using camino paths.
 fn query_buck2_test_owner(
     path: &cargo_metadata::camino::Utf8Path,
     root: &cargo_metadata::camino::Utf8Path,
@@ -354,7 +353,6 @@ fn query_buck2_test_owner(
     query_buck2_test_owner_std(path.as_std_path(), root)
 }
 
-/// Executes 'buck2 uquery' to find the test rule owning a specific file.
 fn query_buck2_test_owner_std(
     path: &std::path::Path,
     root: &cargo_metadata::camino::Utf8Path,
@@ -380,14 +378,29 @@ fn query_buck2_test_owner_std(
     }
 
     let stdout = String::from_utf8(output.stdout)?;
-    let owner = stdout
+
+    let path_str = rel_str.to_string();
+
+    let best_owner = stdout
         .lines()
-        .next()
+        .filter(|l| !l.trim().is_empty())
+        .max_by_key(|target| {
+            let target_parts: Vec<&str> = target.split(&['/', ':', '_'][..]).collect();
+            let file_parts: Vec<&str> = path_str.split(&['/', ':', '_', '.'][..]).collect();
+
+            let mut score = 0;
+            for tp in &target_parts {
+                if !tp.is_empty() && file_parts.contains(tp) {
+                    score += 1;
+                }
+            }
+            (score, target.len())
+        })
         .ok_or_else(|| anyhow!("No Buck2 test rule found that owns file '{}'", rel_str))?;
-    Ok(owner.trim().to_string())
+
+    Ok(best_owner.trim().to_string())
 }
 
-/// Recursively searches for a .rs file matching the specified name.
 fn find_file_recursive(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
     let mut stack = vec![dir.to_path_buf()];
     while let Some(current_dir) = stack.pop() {
