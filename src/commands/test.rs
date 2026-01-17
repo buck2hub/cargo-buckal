@@ -5,6 +5,7 @@ use crate::{
 use anyhow::{Context, Result, anyhow};
 use cargo_metadata::MetadataCommand;
 use clap::Parser;
+use std::collections::HashSet;
 use std::process::exit;
 
 #[derive(Parser, Debug)]
@@ -96,6 +97,27 @@ pub fn execute(args: &TestArgs) {
         cmd = cmd.arg(target);
     }
 
+    for excluded_pkg in &args.exclude {
+        if let Some(pkg) = metadata
+            .packages
+            .iter()
+            .find(|p| p.name.as_str() == excluded_pkg)
+        {
+            let pkg_path = pkg
+                .manifest_path
+                .parent()
+                .ok_or_else(|| anyhow!("Package {} manifest has no parent directory", excluded_pkg))
+                .unwrap_or_exit();
+
+            let relative = pkg_path.strip_prefix(&buck2_root).unwrap_or_exit();
+            let pattern = format_buck2_pattern(relative.as_str());
+            cmd = cmd.arg("--exclude").arg(pattern);
+        }
+    }
+
+    cmd = cmd.arg("--exclude").arg("//third-party/...");
+    cmd = cmd.arg("--exclude").arg("root//third-party/...");
+
     if let Some(jobs) = args.jobs {
         cmd = cmd.arg("-j").arg(jobs.to_string());
     }
@@ -146,54 +168,105 @@ fn resolve_targets(
     let mut patterns = Vec::new();
     let mut specific_found = false;
 
+    // Build a set of workspace members to filter out third-party dependencies efficiently
+    let workspace_members: HashSet<_> = metadata.workspace_members.iter().collect();
+
     if let Some(name) = &args.test_name {
-        let name_norm = name.replace('-', "_");
-        let mut found_in_metadata = false;
+        if is_glob_pattern(name) {
+            for pkg in &metadata.packages {
+                // Critical Filter: Only look at workspace members
+                if !workspace_members.contains(&pkg.id) {
+                    continue;
+                }
 
-        for pkg in &metadata.packages {
-            for target in &pkg.targets {
-                let file_stem = target.src_path.file_stem().unwrap_or("");
-                let target_name_norm = target.name.replace('-', "_");
-                let file_stem_norm = file_stem.replace('-', "_");
-
-                if (target_name_norm == name_norm || file_stem_norm == name_norm)
-                    && target.kind.iter().any(|k| k.to_string() == "test")
-                    && let Ok(owner) = query_buck2_test_owner(&target.src_path, buck2_root)
-                {
-                    patterns.push(owner);
-                    found_in_metadata = true;
-                    specific_found = true;
+                for target in &pkg.targets {
+                    if target.kind.iter().any(|k| k.to_string() == "test")
+                        && glob_match(name, &target.name)
+                        && let Ok(owner) = query_buck2_test_owner(&target.src_path, buck2_root)
+                    {
+                        patterns.push(owner);
+                        specific_found = true;
+                    }
                 }
             }
-        }
-
-        if !found_in_metadata {
-            let root_path = buck2_root.as_std_path();
-            if let Some(file_path) = find_file_recursive(root_path, name)
-                && let Ok(owner) = query_buck2_test_owner_std(&file_path, buck2_root)
-            {
-                patterns.push(owner);
-                return Ok((patterns, true));
+            if !specific_found {
+                return Err(anyhow!("error: no test target matched glob `{}`", name));
             }
         } else {
-            return Ok((patterns, true));
-        }
+            let name_norm = name.replace('-', "_");
+            let mut found_in_metadata = false;
 
-        if patterns.is_empty() {
-            return Err(anyhow!(
-                "error: no test target or source file found matching `{}`",
-                name
-            ));
+            for pkg in &metadata.packages {
+                // Critical Filter: Only look at workspace members
+                if !workspace_members.contains(&pkg.id) {
+                    continue;
+                }
+
+                for target in &pkg.targets {
+                    let file_stem = target.src_path.file_stem().unwrap_or("");
+                    let target_name_norm = target.name.replace('-', "_");
+                    let file_stem_norm = file_stem.replace('-', "_");
+
+                    if (target_name_norm == name_norm || file_stem_norm == name_norm)
+                        && target.kind.iter().any(|k| k.to_string() == "test")
+                        && let Ok(owner) = query_buck2_test_owner(&target.src_path, buck2_root)
+                    {
+                        patterns.push(owner);
+                        found_in_metadata = true;
+                        specific_found = true;
+                    }
+                }
+            }
+
+            if !found_in_metadata {
+                let root_path = buck2_root.as_std_path();
+                if let Some(file_path) = find_file_recursive(root_path, name)
+                    && let Ok(owner) = query_buck2_test_owner_std(&file_path, buck2_root)
+                {
+                    patterns.push(owner);
+                    return Ok((patterns, true));
+                }
+            } else {
+                return Ok((patterns, true));
+            }
+
+            if patterns.is_empty() {
+                return Err(anyhow!(
+                    "error: no test target or source file found matching `{}`",
+                    name
+                ));
+            }
         }
     }
 
     if !args.test.is_empty() {
         for t_name in &args.test {
             let mut found_local = false;
+            let is_glob = is_glob_pattern(t_name);
+            let t_name_norm = if !is_glob {
+                t_name.replace('-', "_")
+            } else {
+                t_name.clone()
+            };
+
             for pkg in &metadata.packages {
+                // Critical Filter: Only look at workspace members
+                if !workspace_members.contains(&pkg.id) {
+                    continue;
+                }
+
                 for target in &pkg.targets {
                     let file_stem = target.src_path.file_stem().unwrap_or("");
-                    if (target.name == *t_name || file_stem == *t_name)
+                    let file_stem_norm = file_stem.replace('-', "_");
+                    let target_name_norm = target.name.replace('-', "_");
+
+                    let is_match = if is_glob {
+                        glob_match(t_name, &target.name)
+                    } else {
+                        target_name_norm == t_name_norm || file_stem_norm == t_name_norm
+                    };
+
+                    if is_match
                         && target.kind.iter().any(|k| k.to_string() == "test")
                         && let Ok(owner) = query_buck2_test_owner(&target.src_path, buck2_root)
                     {
@@ -203,7 +276,8 @@ fn resolve_targets(
                     }
                 }
             }
-            if !found_local {
+
+            if !found_local && !is_glob {
                 let root_path = buck2_root.as_std_path();
                 if let Some(file_path) = find_file_recursive(root_path, t_name)
                     && let Ok(owner) = query_buck2_test_owner_std(&file_path, buck2_root)
@@ -214,7 +288,11 @@ fn resolve_targets(
             }
 
             if !found_local && !specific_found {
-                return Err(anyhow!("error: no test target named `{}`", t_name));
+                if is_glob {
+                    return Err(anyhow!("error: no test target matched glob `{}`", t_name));
+                } else {
+                    return Err(anyhow!("error: no test target named `{}`", t_name));
+                }
             }
         }
     }
@@ -224,7 +302,15 @@ fn resolve_targets(
 
     if has_kind_selection {
         for pkg in &metadata.packages {
-            if !args.package.is_empty() && !args.package.contains(&pkg.name) {
+            // Critical Filter: Either explicit package match OR workspace member
+            let is_workspace_member = workspace_members.contains(&pkg.id);
+
+            if !args.package.is_empty() {
+                if !args.package.contains(&pkg.name) {
+                    continue;
+                }
+            } else if !is_workspace_member {
+                // If no package arg is specified, skip all non-workspace members (e.g. dependencies)
                 continue;
             }
 
@@ -240,16 +326,40 @@ fn resolve_targets(
                     matches_kind = true;
                 }
 
-                if target.kind.iter().any(|k| k.to_string() == "bin")
-                    && (args.bins || args.bin.contains(&target.name))
-                {
-                    matches_kind = true;
+                if target.kind.iter().any(|k| k.to_string() == "bin") {
+                    if args.bins {
+                        matches_kind = true;
+                    } else if !args.bin.is_empty() {
+                        for bin_arg in &args.bin {
+                            if is_glob_pattern(bin_arg) {
+                                if glob_match(bin_arg, &target.name) {
+                                    matches_kind = true;
+                                    specific_found = true;
+                                }
+                            } else if *bin_arg == target.name {
+                                matches_kind = true;
+                                specific_found = true;
+                            }
+                        }
+                    }
                 }
 
-                if target.kind.iter().any(|k| k.to_string() == "example")
-                    && (args.examples || args.example.contains(&target.name))
-                {
-                    matches_kind = true;
+                if target.kind.iter().any(|k| k.to_string() == "example") {
+                    if args.examples {
+                        matches_kind = true;
+                    } else if !args.example.is_empty() {
+                        for ex_arg in &args.example {
+                            if is_glob_pattern(ex_arg) {
+                                if glob_match(ex_arg, &target.name) {
+                                    matches_kind = true;
+                                    specific_found = true;
+                                }
+                            } else if *ex_arg == target.name {
+                                matches_kind = true;
+                                specific_found = true;
+                            }
+                        }
+                    }
                 }
 
                 if matches_kind
@@ -261,14 +371,11 @@ fn resolve_targets(
             }
         }
 
-        if !args.bin.is_empty() && !specific_found {
-            return Err(anyhow!("error: no bin target named `{}`", args.bin[0]));
+        if !args.bin.is_empty() && !specific_found && !args.bins {
+            return Err(anyhow!("error: no bin target matched"));
         }
-        if !args.example.is_empty() && !specific_found {
-            return Err(anyhow!(
-                "error: no example target named `{}`",
-                args.example[0]
-            ));
+        if !args.example.is_empty() && !specific_found && !args.examples {
+            return Err(anyhow!("error: no example target matched"));
         }
     }
 
@@ -335,6 +442,42 @@ fn resolve_targets(
     patterns.retain(|p| !p.contains("third-party"));
 
     Ok((patterns, false))
+}
+
+fn is_glob_pattern(s: &str) -> bool {
+    s.contains('*') || s.contains('?')
+}
+
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let p_chars: Vec<char> = pattern.chars().collect();
+    let t_chars: Vec<char> = text.chars().collect();
+    let mut p_idx = 0;
+    let mut t_idx = 0;
+    let mut last_star = None;
+    let mut last_t = 0;
+
+    while t_idx < t_chars.len() {
+        if p_idx < p_chars.len() && (p_chars[p_idx] == '?' || p_chars[p_idx] == t_chars[t_idx]) {
+            p_idx += 1;
+            t_idx += 1;
+        } else if p_idx < p_chars.len() && p_chars[p_idx] == '*' {
+            last_star = Some(p_idx);
+            p_idx += 1;
+            last_t = t_idx;
+        } else if let Some(star_idx) = last_star {
+            p_idx = star_idx + 1;
+            last_t += 1;
+            t_idx = last_t;
+        } else {
+            return false;
+        }
+    }
+
+    while p_idx < p_chars.len() && p_chars[p_idx] == '*' {
+        p_idx += 1;
+    }
+
+    p_idx == p_chars.len()
 }
 
 fn format_buck2_pattern(rel_path: &str) -> String {

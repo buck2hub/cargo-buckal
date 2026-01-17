@@ -16,6 +16,7 @@ pub enum Commands {
 
 #[derive(Parser, Debug)]
 pub struct BuckalArgs {
+    /// Use verbose output
     #[command(subcommand)]
     pub subcommands: BuckalSubCommands,
 }
