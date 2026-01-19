@@ -63,13 +63,11 @@ jobs:
           )
 
     steps:
-      # Checkout the repository at the appropriate commit for review
+      # Checkout the repository (default to base/context to ensure git is initialized)
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Use PR head SHA for pull_request_target, fallback to current SHA otherwise
           fetch-depth: 0
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Checkout PR Branch
         env:
