@@ -37,17 +37,6 @@ pub fn execute(args: &MigrateArgs) {
     // Ensure all prerequisites are installed before proceeding
     ensure_prerequisites().unwrap_or_exit();
 
-    // get cargo metadata and generate context
-    let mut ctx = BuckalContext::new();
-    ctx.no_merge = !args.merge;
-    ctx.separate = args.separate;
-
-    // Fetch latest bundles if requested
-    if args.fetch {
-        let cwd = std::env::current_dir().unwrap_or_exit();
-        fetch_buckal_cell(&cwd).unwrap_or_exit();
-    }
-
     // Initialize Buck2 project if requested
     // Compared to `cargo buckal init`, here we only setup Buck2 related files
     if args.buck2 {
@@ -79,6 +68,17 @@ pub fn execute(args: &MigrateArgs) {
         // Init cfg modifiers
         init_modifier(&cwd).unwrap_or_exit();
     }
+
+    // Fetch latest bundles if requested
+    if args.fetch {
+        let cwd = std::env::current_dir().unwrap_or_exit();
+        fetch_buckal_cell(&cwd).unwrap_or_exit();
+    }
+
+    // get cargo metadata and generate context
+    let mut ctx = BuckalContext::new();
+    ctx.no_merge = !args.merge;
+    ctx.separate = args.separate;
 
     // Process the root node
     flush_root(&ctx);

@@ -136,11 +136,6 @@ pub fn flush_root(ctx: &BuckalContext) {
             "third-party alias rules (inherit_workspace_deps=true)"
         );
         generate_third_party_aliases(ctx);
-    } else {
-        buckal_log!(
-            "Skipping",
-            "third-party alias generation (inherit_workspace_deps=false)"
-        );
     }
 
     let cwd = std::env::current_dir().expect("Failed to get current directory");
