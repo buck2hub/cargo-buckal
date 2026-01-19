@@ -71,36 +71,32 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
-      - name: Checkout PR Branch (for comments)
-        if: ${{ github.event_name == 'issue_comment' || github. event_name == 'pull_request_review_comment' }}
+      # Handle fork branches for pull_request_target events
+      - name: Setup Fork Remote (for pull_request_target)
+        if: ${{ github.event_name == 'pull_request_target' }}
         env:
-          GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.name }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
-          PR_NUMBER=${{ github.event.issue.number || github.event.pull_request.number }}
+          PR_NUMBER="$PR_NUMBER"
+          HEAD_REF="$PR_HEAD_REF"
+          HEAD_OWNER="$PR_HEAD_OWNER"
+          HEAD_REPO="$PR_HEAD_REPO"
+          CURRENT_OWNER="$REPO_OWNER"
 
-          # Fetch PR metadata: head branch name and source repository
-          PR_DATA=$(gh pr view $PR_NUMBER --json headRefName,headRepositoryOwner,headRepository,baseRefName)
-          HEAD_REF=$(echo "$PR_DATA" | jq -r '. headRefName')
-          HEAD_OWNER=$(echo "$PR_DATA" | jq -r '.headRepositoryOwner.login')
-          HEAD_REPO=$(echo "$PR_DATA" | jq -r '.headRepository.name')
-          BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
-          CURRENT_OWNER="${{ github.repository_owner }}"
-
-          echo "HEAD_REF=$HEAD_REF" >> $GITHUB_ENV
-          echo "HEAD_OWNER=$HEAD_OWNER" >> $GITHUB_ENV
-          
-          # For forked PRs, add a new remote
+          # For forked PRs, temporarily change origin URL to fork repository
+          # This allows tools to find the PR branch on 'origin'
           if [ "$HEAD_OWNER" != "$CURRENT_OWNER" ]; then
             echo "PR is from fork: $HEAD_OWNER/$HEAD_REPO"
             FORK_URL="https://github.com/$HEAD_OWNER/$HEAD_REPO.git"
-            echo "Adding fork remote: $FORK_URL"
-            git remote add fork "$FORK_URL" || true
-            git fetch fork "$HEAD_REF" --depth=50
-            git checkout -B "$HEAD_REF" "fork/$HEAD_REF"
-          else
-            # Same repo
-            git fetch origin "$HEAD_REF" --depth=50
-            git checkout -B "$HEAD_REF" "origin/$HEAD_REF"
+            echo "Temporarily changing origin URL to fork: $FORK_URL"
+            git remote set-url origin "$FORK_URL"
+            git fetch origin "$HEAD_REF"
+            git branch "$HEAD_REF" "origin/$HEAD_REF" 2>/dev/null || git branch -f "$HEAD_REF" "origin/$HEAD_REF"
           fi
 
       # For comment-driven triggers, ensure we have the correct PR branch checked out
@@ -120,7 +116,6 @@ jobs:
           CURRENT_OWNER="${{ github.repository_owner }}"
 
           # For forked PRs, temporarily change origin URL to fork repository
-          # This allows 'git fetch origin' (used by tools) to find the PR branch
           if [ "$HEAD_OWNER" != "$CURRENT_OWNER" ]; then
             echo "PR is from fork: $HEAD_OWNER/$HEAD_REPO"
             FORK_URL="https://github.com/$HEAD_OWNER/$HEAD_REPO.git"
@@ -139,6 +134,8 @@ jobs:
       # Invoke Claude to perform an automated PR review with progress tracking
       - name: PR Review with Progress Tracking
         uses: anthropics/claude-code-action@v1
+        env:
+          GH_REPO: ${{ github.repository }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -183,4 +180,3 @@ jobs:
           # Restrict tools that Claude can use during the review
           claude_args: |
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
-
