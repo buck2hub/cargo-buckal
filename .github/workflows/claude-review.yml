@@ -119,14 +119,15 @@ jobs:
           BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
           CURRENT_OWNER="${{ github.repository_owner }}"
 
-          # For forked PRs, add a new remote
+          # For forked PRs, temporarily change origin URL to fork repository
+          # This allows 'git fetch origin' (used by tools) to find the PR branch
           if [ "$HEAD_OWNER" != "$CURRENT_OWNER" ]; then
             echo "PR is from fork: $HEAD_OWNER/$HEAD_REPO"
             FORK_URL="https://github.com/$HEAD_OWNER/$HEAD_REPO.git"
-            echo "Adding fork remote: $FORK_URL"
-            git remote add fork "$FORK_URL"
-            git fetch fork "$HEAD_REF"
-            git branch "$HEAD_REF" "fork/$HEAD_REF" 2>/dev/null || git branch -f "$HEAD_REF" "fork/$HEAD_REF"
+            echo "Temporarily changing origin URL to fork: $FORK_URL"
+            git remote set-url origin "$FORK_URL"
+            git fetch origin "$HEAD_REF"
+            git branch "$HEAD_REF" "origin/$HEAD_REF" 2>/dev/null || git branch -f "$HEAD_REF" "origin/$HEAD_REF"
           else
             # Same repo
             git fetch origin "$HEAD_REF"
