@@ -83,10 +83,22 @@ jobs:
             exit 1
           fi
 
-          PR_INFO=$(gh pr view $PR_NUMBER --json baseRefName)
+          PR_INFO=$(gh pr view $PR_NUMBER --json baseRefName,headRepositoryOwner,headRepository,headRefName)
           BASE_REF=$(echo "$PR_INFO" | jq -r '.baseRefName')
-          git fetch origin "$BASE_REF"
-          git checkout -B "pr-review-$PR_NUMBER" "origin/$BASE_REF"
+          HEAD_OWNER=$(echo "$PR_INFO" | jq -r '.headRepositoryOwner.login')
+          HEAD_REPO=$(echo "$PR_INFO" | jq -r '.headRepository.name')
+          HEAD_REF=$(echo "$PR_INFO" | jq -r '.headRefName')
+
+          BASE_REPO="${{ github.repository }}"
+          BASE_URL="https://github.com/$BASE_REPO.git"
+          git remote add base "$BASE_URL" || git remote set-url base "$BASE_URL"
+          git fetch base "$BASE_REF"
+          git checkout -B "pr-review-$PR_NUMBER" "base/$BASE_REF"
+
+          if [ "$HEAD_OWNER/$HEAD_REPO" != "$BASE_REPO" ]; then
+            FORK_URL="https://github.com/$HEAD_OWNER/$HEAD_REPO.git"
+            git remote set-url origin "$FORK_URL"
+          fi
 
           gh pr diff $PR_NUMBER --patch > /tmp/pr.patch
           git apply --3way /tmp/pr.patch
