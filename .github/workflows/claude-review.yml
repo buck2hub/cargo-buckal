@@ -71,32 +71,36 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
-      # Handle fork branches for pull_request_target events
-      - name: Setup Fork Remote (for pull_request_target)
-        if: ${{ github.event_name == 'pull_request_target' }}
+      - name: Checkout PR Branch (for comments)
+        if: ${{ github.event_name == 'issue_comment' || github. event_name == 'pull_request_review_comment' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
-          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.name }}
-          REPO_OWNER: ${{ github.repository_owner }}
+          GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUMBER="$PR_NUMBER"
-          HEAD_REF="$PR_HEAD_REF"
-          HEAD_OWNER="$PR_HEAD_OWNER"
-          HEAD_REPO="$PR_HEAD_REPO"
-          CURRENT_OWNER="$REPO_OWNER"
+          PR_NUMBER=${{ github.event.issue.number || github.event.pull_request.number }}
 
-          # For forked PRs, add a new remote instead of changing origin
-          # This ensures 'gh' commands still work against the base repo
+          # Fetch PR metadata: head branch name and source repository
+          PR_DATA=$(gh pr view $PR_NUMBER --json headRefName,headRepositoryOwner,headRepository,baseRefName)
+          HEAD_REF=$(echo "$PR_DATA" | jq -r '. headRefName')
+          HEAD_OWNER=$(echo "$PR_DATA" | jq -r '.headRepositoryOwner.login')
+          HEAD_REPO=$(echo "$PR_DATA" | jq -r '.headRepository.name')
+          BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
+          CURRENT_OWNER="${{ github.repository_owner }}"
+
+          echo "HEAD_REF=$HEAD_REF" >> $GITHUB_ENV
+          echo "HEAD_OWNER=$HEAD_OWNER" >> $GITHUB_ENV
+          
+          # For forked PRs, add a new remote
           if [ "$HEAD_OWNER" != "$CURRENT_OWNER" ]; then
             echo "PR is from fork: $HEAD_OWNER/$HEAD_REPO"
             FORK_URL="https://github.com/$HEAD_OWNER/$HEAD_REPO.git"
             echo "Adding fork remote: $FORK_URL"
-            git remote add fork "$FORK_URL"
-            git fetch fork "$HEAD_REF"
-            git branch "$HEAD_REF" "fork/$HEAD_REF" 2>/dev/null || git branch -f "$HEAD_REF" "fork/$HEAD_REF"
+            git remote add fork "$FORK_URL" || true
+            git fetch fork "$HEAD_REF" --depth=50
+            git checkout -B "$HEAD_REF" "fork/$HEAD_REF"
+          else
+            # Same repo
+            git fetch origin "$HEAD_REF" --depth=50
+            git checkout -B "$HEAD_REF" "origin/$HEAD_REF"
           fi
 
       # For comment-driven triggers, ensure we have the correct PR branch checked out
