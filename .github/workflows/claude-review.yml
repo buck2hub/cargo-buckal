@@ -91,16 +91,28 @@ jobs:
 
           BASE_REPO="${{ github.repository }}"
           BASE_URL="https://github.com/$BASE_REPO.git"
+          echo "Event: ${{ github.event_name }}"
+          echo "PR_NUMBER=$PR_NUMBER"
+          echo "PR_INFO=$PR_INFO"
+          echo "BASE_REPO=$BASE_REPO"
+          echo "BASE_REF=$BASE_REF"
+          echo "HEAD_OWNER=$HEAD_OWNER"
+          echo "HEAD_REPO=$HEAD_REPO"
+          echo "HEAD_REF=$HEAD_REF"
           git remote add base "$BASE_URL" || git remote set-url base "$BASE_URL"
+          git remote -v
           git fetch base "$BASE_REF"
           git checkout -B "pr-review-$PR_NUMBER" "base/$BASE_REF"
 
           if [ "$HEAD_OWNER/$HEAD_REPO" != "$BASE_REPO" ]; then
             FORK_URL="https://github.com/$HEAD_OWNER/$HEAD_REPO.git"
             git remote set-url origin "$FORK_URL"
+            echo "origin set to $FORK_URL"
           fi
 
           gh pr diff $PR_NUMBER --patch > /tmp/pr.patch
+          git status -sb
+          git branch -av
           git apply --3way /tmp/pr.patch
 
       # Invoke Claude to perform an automated PR review with progress tracking
