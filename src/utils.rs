@@ -309,7 +309,7 @@ pub fn ensure_buck2_installed() -> io::Result<()> {
 
 pub fn get_buck2_root() -> io::Result<Utf8PathBuf> {
     // This function should return the root directory of the Buck2 project.
-    let out_put = Buck2Command::root().output()?;
+    let out_put = Buck2Command::root().arg("--kind").arg("project").output()?;
     if out_put.status.success() {
         let path_str = String::from_utf8_lossy(&out_put.stdout).trim().to_string();
         Ok(Utf8PathBuf::from(path_str))
