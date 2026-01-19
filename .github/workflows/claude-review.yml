@@ -94,11 +94,11 @@ jobs:
           echo "PR Head: $HEAD_OWNER/$HEAD_REPO:$HEAD_REF"
 
           if [ "$HEAD_OWNER" != "$CURRENT_OWNER" ]; then
-            echo "PR is from a fork. Adding remote..."
+            echo "PR is from a fork. Updating origin to fork..."
             FORK_URL="https://github.com/$HEAD_OWNER/$HEAD_REPO.git"
-            git remote add fork "$FORK_URL" || git remote set-url fork "$FORK_URL"
-            git fetch fork "$HEAD_REF"
-            git checkout -B "$HEAD_REF" "fork/$HEAD_REF"
+            git remote set-url origin "$FORK_URL"
+            git fetch origin "$HEAD_REF"
+            git checkout -B "$HEAD_REF" "origin/$HEAD_REF"
           else
             echo "PR is from the same repo."
             git fetch origin "$HEAD_REF"
