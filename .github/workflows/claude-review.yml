@@ -63,71 +63,85 @@ jobs:
           )
 
     steps:
-      # Checkout the repository (default to base/context to ensure git is initialized)
+      # Checkout the repository at the appropriate commit for review
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          # Use PR head SHA for pull_request_target, fallback to current SHA otherwise
           fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
-      - name: Checkout PR Branch
+      # Handle fork branches for pull_request_target events
+      - name: Setup Fork Remote (for pull_request_target)
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.name }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          PR_NUMBER="$PR_NUMBER"
+          HEAD_REF="$PR_HEAD_REF"
+          HEAD_OWNER="$PR_HEAD_OWNER"
+          HEAD_REPO="$PR_HEAD_REPO"
+          CURRENT_OWNER="$REPO_OWNER"
+
+          # For forked PRs, temporarily change origin URL to fork repository
+          # This allows claude-code-action to fetch the PR branch correctly
+          if [ "$HEAD_OWNER" != "$CURRENT_OWNER" ]; then
+            echo "PR is from fork: $HEAD_OWNER/$HEAD_REPO"
+            FORK_URL="https://github.com/$HEAD_OWNER/$HEAD_REPO.git"
+            echo "Temporarily changing origin URL to fork: $FORK_URL"
+            git remote set-url origin "$FORK_URL"
+            git fetch origin "$HEAD_REF"
+            git branch "$HEAD_REF" "origin/$HEAD_REF" 2>/dev/null || git branch -f "$HEAD_REF" "origin/$HEAD_REF"
+          fi
+
+      # For comment-driven triggers, ensure we have the correct PR branch checked out
+      - name: Checkout PR Branch (for comments)
+        if: ${{ github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number || github.event.review.pull_request_url }}"
-          if [[ "$PR_NUMBER" == *"http"* ]]; then
-            PR_NUMBER=$(basename "$PR_NUMBER")
-          fi
+          PR_NUMBER=${{ github.event.issue.number || github.event.pull_request.number }}
 
-          if [ -z "$PR_NUMBER" ]; then
-            echo "Error: Could not determine PR number"
-            exit 1
-          fi
+          # Fetch PR metadata: head branch name and source repository
+          PR_DATA=$(gh pr view $PR_NUMBER --json headRefName,headRepositoryOwner,headRepository,baseRefName)
+          HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
+          HEAD_OWNER=$(echo "$PR_DATA" | jq -r '.headRepositoryOwner.login')
+          HEAD_REPO=$(echo "$PR_DATA" | jq -r '.headRepository.name')
+          BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
+          CURRENT_OWNER="${{ github.repository_owner }}"
 
-          PR_INFO=$(gh pr view $PR_NUMBER --json baseRefName,headRepositoryOwner,headRepository,headRefName)
-          BASE_REF=$(echo "$PR_INFO" | jq -r '.baseRefName')
-          HEAD_OWNER=$(echo "$PR_INFO" | jq -r '.headRepositoryOwner.login')
-          HEAD_REPO=$(echo "$PR_INFO" | jq -r '.headRepository.name')
-          HEAD_REF=$(echo "$PR_INFO" | jq -r '.headRefName')
-
-          BASE_REPO="${{ github.repository }}"
-          BASE_URL="https://github.com/$BASE_REPO.git"
-          echo "Event: ${{ github.event_name }}"
-          echo "PR_NUMBER=$PR_NUMBER"
-          echo "PR_INFO=$PR_INFO"
-          echo "BASE_REPO=$BASE_REPO"
-          echo "BASE_REF=$BASE_REF"
-          echo "HEAD_OWNER=$HEAD_OWNER"
-          echo "HEAD_REPO=$HEAD_REPO"
-          echo "HEAD_REF=$HEAD_REF"
-          git remote add base "$BASE_URL" || git remote set-url base "$BASE_URL"
-          git remote -v
-          git fetch base "$BASE_REF"
-          git checkout -B "pr-review-$PR_NUMBER" "base/$BASE_REF"
-
-          if [ "$HEAD_OWNER/$HEAD_REPO" != "$BASE_REPO" ]; then
+          # For forked PRs, temporarily change origin URL to fork repository
+          # This allows claude-code-action to fetch the PR branch correctly
+          if [ "$HEAD_OWNER" != "$CURRENT_OWNER" ]; then
+            echo "PR is from fork: $HEAD_OWNER/$HEAD_REPO"
             FORK_URL="https://github.com/$HEAD_OWNER/$HEAD_REPO.git"
+            echo "Temporarily changing origin URL to fork: $FORK_URL"
             git remote set-url origin "$FORK_URL"
-            echo "origin set to $FORK_URL"
           fi
 
-          gh pr diff $PR_NUMBER --patch > /tmp/pr.patch
-          git status -sb
-          git branch -av
-          git apply --3way /tmp/pr.patch
+          # Fetch and checkout the PR branch
+          git fetch origin "$HEAD_REF"
+          git branch "$HEAD_REF" "origin/$HEAD_REF" 2>/dev/null || git branch -f "$HEAD_REF" "origin/$HEAD_REF"
+          git checkout "$HEAD_REF"
 
       # Invoke Claude to perform an automated PR review with progress tracking
       - name: PR Review with Progress Tracking
-        uses: anthropics/claude-code-base-action@beta
-        env:
-          GH_REPO: ${{ github.repository }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+          # Enable progress tracking and show full Claude output in logs
+          track_progress: true
 
           # Custom review instructions passed to Claude
           prompt: |
             REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
 
             Perform a comprehensive code review with the following focus areas:
 
@@ -160,5 +174,6 @@ jobs:
             Use top-level comments for general observations or praise.
 
           # Restrict tools that Claude can use during the review
-          allowed_tools: |
-            mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+
