@@ -71,65 +71,41 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
-      # Handle fork branches for pull_request_target events
-      - name: Setup Fork Remote (for pull_request_target)
-        if: ${{ github.event_name == 'pull_request_target' }}
+      - name: Checkout PR Branch
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
-          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.name }}
-          REPO_OWNER: ${{ github.repository_owner }}
         run: |
-          PR_NUMBER="$PR_NUMBER"
-          HEAD_REF="$PR_HEAD_REF"
-          HEAD_OWNER="$PR_HEAD_OWNER"
-          HEAD_REPO="$PR_HEAD_REPO"
-          CURRENT_OWNER="$REPO_OWNER"
-
-          # For forked PRs, temporarily change origin URL to fork repository
-          # This allows tools to find the PR branch on 'origin'
-          if [ "$HEAD_OWNER" != "$CURRENT_OWNER" ]; then
-            echo "PR is from fork: $HEAD_OWNER/$HEAD_REPO"
-            FORK_URL="https://github.com/$HEAD_OWNER/$HEAD_REPO.git"
-            echo "Temporarily changing origin URL to fork: $FORK_URL"
-            git remote set-url origin "$FORK_URL"
-            git fetch origin "$HEAD_REF"
-            git branch "$HEAD_REF" "origin/$HEAD_REF" 2>/dev/null || git branch -f "$HEAD_REF" "origin/$HEAD_REF"
+          PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number || github.event.review.pull_request_url }}"
+          # Extract number from URL if needed (for review events)
+          if [[ "$PR_NUMBER" == *"http"* ]]; then
+             PR_NUMBER=$(basename "$PR_NUMBER")
           fi
 
-      # For comment-driven triggers, ensure we have the correct PR branch checked out
-      - name: Checkout PR Branch (for comments)
-        if: ${{ github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PR_NUMBER=${{ github.event.issue.number || github.event.pull_request.number }}
+          if [ -z "$PR_NUMBER" ]; then
+            echo "Error: Could not determine PR number"
+            exit 1
+          fi
 
-          # Fetch PR metadata: head branch name and source repository
-          PR_DATA=$(gh pr view $PR_NUMBER --json headRefName,headRepositoryOwner,headRepository,baseRefName)
-          HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
-          HEAD_OWNER=$(echo "$PR_DATA" | jq -r '.headRepositoryOwner.login')
-          HEAD_REPO=$(echo "$PR_DATA" | jq -r '.headRepository.name')
-          BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
+          echo "Fetching PR #$PR_NUMBER metadata..."
+          PR_INFO=$(gh pr view $PR_NUMBER --json headRepository,headRepositoryOwner,headRefName)
+          HEAD_OWNER=$(echo "$PR_INFO" | jq -r '.headRepositoryOwner.login')
+          HEAD_REPO=$(echo "$PR_INFO" | jq -r '.headRepository.name')
+          HEAD_REF=$(echo "$PR_INFO" | jq -r '.headRefName')
           CURRENT_OWNER="${{ github.repository_owner }}"
 
-          # For forked PRs, temporarily change origin URL to fork repository
-          if [ "$HEAD_OWNER" != "$CURRENT_OWNER" ]; then
-            echo "PR is from fork: $HEAD_OWNER/$HEAD_REPO"
-            FORK_URL="https://github.com/$HEAD_OWNER/$HEAD_REPO.git"
-            echo "Temporarily changing origin URL to fork: $FORK_URL"
-            git remote set-url origin "$FORK_URL"
-            git fetch origin "$HEAD_REF"
-            git branch "$HEAD_REF" "origin/$HEAD_REF" 2>/dev/null || git branch -f "$HEAD_REF" "origin/$HEAD_REF"
-          else
-            # Same repo
-            git fetch origin "$HEAD_REF"
-            git branch "$HEAD_REF" "origin/$HEAD_REF" 2>/dev/null || git branch -f "$HEAD_REF" "origin/$HEAD_REF"
-          fi
+          echo "PR Head: $HEAD_OWNER/$HEAD_REPO:$HEAD_REF"
 
-          git checkout "$HEAD_REF"
+          if [ "$HEAD_OWNER" != "$CURRENT_OWNER" ]; then
+            echo "PR is from a fork. Adding remote..."
+            FORK_URL="https://github.com/$HEAD_OWNER/$HEAD_REPO.git"
+            git remote add fork "$FORK_URL" || git remote set-url fork "$FORK_URL"
+            git fetch fork "$HEAD_REF"
+            git checkout -B "$HEAD_REF" "fork/$HEAD_REF"
+          else
+            echo "PR is from the same repo."
+            git fetch origin "$HEAD_REF"
+            git checkout -B "$HEAD_REF" "origin/$HEAD_REF"
+          fi
 
       # Invoke Claude to perform an automated PR review with progress tracking
       - name: PR Review with Progress Tracking
