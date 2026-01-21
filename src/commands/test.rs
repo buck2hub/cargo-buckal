@@ -9,61 +9,84 @@ use std::collections::HashSet;
 use std::process::exit;
 
 #[derive(Parser, Debug)]
+#[command(
+    name = "test",
+    about = "Execute all unit and integration tests and build examples of a local package"
+)]
 pub struct TestArgs {
+    /// Package to test
     #[arg(short, long, value_name = "SPEC")]
     pub package: Vec<String>,
 
+    /// Test all packages in the workspace
     #[arg(long)]
     pub workspace: bool,
 
+    /// Exclude packages from the test
     #[arg(long, value_name = "SPEC")]
     pub exclude: Vec<String>,
 
+    /// Test all targets
     #[arg(long)]
     pub all_targets: bool,
 
+    /// Test only this package's library unit tests
     #[arg(long)]
     pub lib: bool,
 
+    /// Test only the specified binary
     #[arg(long, value_name = "NAME")]
     pub bin: Vec<String>,
 
+    /// Test all binaries
     #[arg(long)]
     pub bins: bool,
 
+    /// Test only the specified example
     #[arg(long, value_name = "NAME")]
     pub example: Vec<String>,
 
+    /// Test all examples
     #[arg(long)]
     pub examples: bool,
 
+    /// Test only the specified test target
     #[arg(long, value_name = "NAME")]
     pub test: Vec<String>,
 
+    /// Test all tests
     #[arg(long)]
     pub tests: bool,
 
+    /// Compile, but don't run tests
     #[arg(long)]
     pub no_run: bool,
 
+    /// Run all tests regardless of failure
     #[arg(long)]
     pub no_fail_fast: bool,
 
+    /// Number of parallel jobs, defaults to # of CPUs
     #[arg(short, long, value_name = "N")]
     pub jobs: Option<usize>,
 
+    /// Build for the target triple
     #[arg(long, value_name = "TRIPLE")]
     pub target: Option<String>,
 
+    /// Build artifacts in release mode, with optimizations
     #[arg(short, long)]
     pub release: bool,
 
+    /// Build artifacts with the specified profile
     #[arg(long, value_name = "PROFILE-NAME")]
     pub profile: Option<String>,
 
+    /// Test only the specified test target (positional argument)
     #[arg(value_name = "TESTNAME")]
     pub test_name: Option<String>,
 
+    /// Arguments for the test binary
     #[arg(last = true)]
     pub args: Vec<String>,
 }
