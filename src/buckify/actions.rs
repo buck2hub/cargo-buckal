@@ -10,10 +10,10 @@ use cargo_metadata::camino::Utf8PathBuf;
 use crate::{
     RUST_CRATES_ROOT,
     buck::{Alias, parse_buck_file, patch_buck_rules},
-    buckal_log, buckal_warn,
+    buckal_log,
     cache::{BuckalChange, ChangeType},
     context::BuckalContext,
-    utils::{UnwrapOrExit, get_buck2_root, get_vendor_dir, rewrite_target_if_needed},
+    utils::{UnwrapOrExit, get_buck2_root, get_vendor_dir},
 };
 
 use super::{
@@ -196,15 +196,9 @@ fn generate_third_party_aliases(ctx: &BuckalContext) {
             crate_name, latest.version, crate_name
         );
 
-        let rewritten_target = rewrite_target_if_needed(&actual, ctx.repo_config.align_cells)
-            .unwrap_or_else(|e| {
-                buckal_warn!("Failed to rewrite target label '{}': {}", actual, e);
-                actual
-            });
-
         let rule = Alias {
             name: crate_name.clone(),
-            actual: rewritten_target,
+            actual,
             visibility: ["PUBLIC"].into_iter().map(String::from).collect(),
         };
         let rendered = serde_starlark::to_string(&rule).expect("failed to serialize alias");

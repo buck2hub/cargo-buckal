@@ -12,7 +12,7 @@ use crate::{
     buckal_note, buckal_warn,
     context::BuckalContext,
     platform::{Os, oses_from_platform, platform_is_target_only},
-    utils::{get_buck2_root, rewrite_target_if_needed},
+    utils::get_buck2_root,
 };
 
 pub(super) fn dep_kind_matches(target_kind: CargoTargetKind, dep_kind: DependencyKind) -> bool {
@@ -90,7 +90,6 @@ fn resolve_dep_label(
     dep: &NodeDep,
     dep_package: &Package,
     use_workspace_alias: bool,
-    align_cells: bool,
 ) -> Result<(String, Option<String>)> {
     let dep_package_name = dep_package.name.to_string();
     let is_renamed = dep.name != dep_package_name.replace("-", "_");
@@ -100,31 +99,28 @@ fn resolve_dep_label(
         None
     };
 
-    let label = if dep_package.source.is_none() {
-        resolve_first_party_label(dep_package).with_context(|| {
+    if dep_package.source.is_none() {
+        let label = resolve_first_party_label(dep_package).with_context(|| {
             format!(
                 "failed to resolve first-party label for `{}`",
                 dep_package.name
             )
-        })?
+        })?;
+        Ok((label, alias))
     } else {
         // third-party dependency
-        if use_workspace_alias {
-            format!("//third-party/rust:{}", dep_package.name)
-        } else {
-            format!(
-                "//{RUST_CRATES_ROOT}/{}/{}:{}",
-                dep_package.name, dep_package.version, dep_package.name
-            )
-        }
-    };
-
-    let rewritten_target = rewrite_target_if_needed(&label, align_cells).unwrap_or_else(|e| {
-        buckal_warn!("Failed to rewrite target label '{}': {}", label, e);
-        label
-    });
-
-    Ok((rewritten_target, alias))
+        Ok((
+            if use_workspace_alias {
+                format!("//third-party/rust:{}", dep_package.name)
+            } else {
+                format!(
+                    "//{RUST_CRATES_ROOT}/{}/{}:{}",
+                    dep_package.name, dep_package.version, dep_package.name
+                )
+            },
+            alias,
+        ))
+    }
 }
 
 /// Insert a dependency label into `rust_rule` in the appropriate attribute.
@@ -257,18 +253,13 @@ pub(super) fn set_deps(
             continue;
         }
 
-        let (target_label, alias) = resolve_dep_label(
-            dep,
-            dep_package,
-            use_workspace_alias,
-            ctx.repo_config.align_cells,
-        )
-        .with_context(|| {
-            format!(
-                "failed to resolve dependency label for '{}' (package '{}')",
-                dep.name, dep_package.name
-            )
-        })?;
+        let (target_label, alias) = resolve_dep_label(dep, dep_package, use_workspace_alias)
+            .with_context(|| {
+                format!(
+                    "failed to resolve dependency label for '{}' (package '{}')",
+                    dep.name, dep_package.name
+                )
+            })?;
 
         if unconditional {
             insert_dep(rust_rule, &target_label, alias.as_deref(), None)?;

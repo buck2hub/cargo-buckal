@@ -78,8 +78,7 @@ pub fn buckify_dep_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
         buck_rules.push(Rule::RustBinary(buildscript_build));
 
         // create the build script run rule
-        let buildscript_run =
-            emit_buildscript_run(&package, node, &ctx.packages_map, build_target, ctx);
+        let buildscript_run = emit_buildscript_run(&package, node, &ctx.packages_map, build_target);
         buck_rules.push(Rule::BuildscriptRun(buildscript_run));
     }
 
@@ -249,8 +248,7 @@ pub fn buckify_root_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
         buck_rules.push(Rule::RustBinary(buildscript_build));
 
         // create the build script run rule
-        let buildscript_run =
-            emit_buildscript_run(&package, node, &ctx.packages_map, build_target, ctx);
+        let buildscript_run = emit_buildscript_run(&package, node, &ctx.packages_map, build_target);
         buck_rules.push(Rule::BuildscriptRun(buildscript_run));
     }
 

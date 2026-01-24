@@ -11,10 +11,9 @@ use crate::{
         BuildscriptRun, CargoManifest, CargoTargetKind, FileGroup, Glob, HttpArchive, RustBinary,
         RustLibrary, RustRule, RustTest,
     },
-    buckal_warn,
     context::BuckalContext,
     platform::{buck_labels, lookup_platforms},
-    utils::{UnwrapOrExit, get_cfgs, get_target, rewrite_target_if_needed},
+    utils::{UnwrapOrExit, get_cfgs, get_target},
 };
 
 use super::deps::{dep_kind_matches, set_deps};
@@ -247,7 +246,6 @@ pub(super) fn emit_buildscript_run(
     node: &Node,
     packages_map: &HashMap<PackageId, Package>,
     build_target: &Target,
-    ctx: &BuckalContext,
 ) -> BuildscriptRun {
     // create the build script run rule
     let build_name = get_build_name(&build_target.name);
@@ -287,23 +285,10 @@ pub(super) fn emit_buildscript_run(
                 .find(|t| t.kind.contains(&cargo_metadata::TargetKind::CustomBuild));
             if let Some(build_target_dep) = custom_build_target_dep {
                 let build_name_dep = get_build_name(&build_target_dep.name);
-
-                let target_label = format!(
+                buildscript_run.env_srcs.insert(format!(
                     "//{RUST_CRATES_ROOT}/{}/{}:{}-{build_name_dep}-run[metadata]",
                     dep_package.name, dep_package.version, dep_package.name
-                );
-                let rewritten_target =
-                    rewrite_target_if_needed(&target_label, ctx.repo_config.align_cells)
-                        .unwrap_or_else(|e| {
-                            buckal_warn!(
-                                "Failed to rewrite target label '{}': {}",
-                                target_label,
-                                e
-                            );
-                            target_label.clone()
-                        });
-
-                buildscript_run.env_srcs.insert(rewritten_target);
+                ));
             } else {
                 panic!(
                     "Dependency {} has links key but no build script target",
