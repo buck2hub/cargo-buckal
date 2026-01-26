@@ -151,7 +151,7 @@ pub fn buckify_root_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
     // emit buck rules for lib targets
     for lib_target in &lib_targets {
         let buckal_name = if bin_targets.iter().any(|b| b.name == lib_target.name) {
-            format!("{}-lib", lib_target.name)
+            format!(":{}-lib", lib_target.name)
         } else {
             lib_target.name.to_owned()
         };
@@ -212,7 +212,7 @@ pub fn buckify_root_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
             }
             if lib_targets.iter().any(|l| l.name == package_name) {
                 if lib_alias {
-                    rust_test.deps_mut().insert(format!(":lib{}", package_name));
+                    rust_test.deps_mut().insert(format!(":{}-lib", package_name));
                 } else {
                     rust_test.deps_mut().insert(format!(":{}", package_name));
                 }

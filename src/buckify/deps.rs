@@ -78,7 +78,7 @@ fn resolve_first_party_label(dep_package: &Package) -> Result<String> {
         .iter()
         .any(|b| b.name == dep_lib_targets[0].name)
     {
-        format!("lib{}", dep_lib_targets[0].name)
+        format!(":{}-lib", dep_lib_targets[0].name)
     } else {
         dep_lib_targets[0].name.to_owned()
     };
