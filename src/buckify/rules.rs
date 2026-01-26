@@ -431,7 +431,7 @@ mod tests {
         });
 
         assert!(lib_rule.is_some());
-        assert_eq!(lib_rule.unwrap().name, ":foo-lib");
+        assert_eq!(lib_rule.unwrap().name, "foo-lib");
     }
 
     #[test]
