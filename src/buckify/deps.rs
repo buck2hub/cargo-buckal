@@ -304,7 +304,7 @@ mod tests {
         let bin_targets = vec![&bin];
 
         let name = resolve_buckal_name(&bin_targets, &lib_targets);
-        assert_eq!(name, ":foo-lib");
+        assert_eq!(name, "foo-lib");
     }
 
     #[test]
