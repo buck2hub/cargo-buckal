@@ -1,74 +1,77 @@
-Your task is to "onboard" this repository to Copilot coding agent by adding a .github/copilot-instructions.md file in the repository that contains information describing how a coding agent seeing it for the first time can work most efficiently.
+# Copilot instructions for this repository
 
-You will do this task only one time per repository and doing a good job can SIGNIFICANTLY improve the quality of the agent's work, so take your time, think carefully, and search thoroughly before writing the instructions.
+These instructions are intended for an automated coding agent (such as GitHub Copilot) working in this repository. They describe where to look for important information and how to validate changes.
 
-<Goals>
-- Reduce the likelihood of a coding agent pull request getting rejected by the user due to
-generating code that fails the continuous integration build, fails a validation pipeline, or
-having misbehavior.
-- Minimize bash command and build failures.
-- Allow the agent to complete its task more quickly by minimizing the need for exploration using grep, find, str_replace_editor, and code search tools.
-</Goals>
+## 1. Understanding the repository
 
-<Limitations>
-- Instructions must be no longer than 2 pages.
-- Instructions must not be task specific.
-</Limitations>
+- Start by reading `README.md` in the repository root. Treat it as the source of truth for:
+  - What the project does.
+  - Any language, framework, or runtime requirements.
+  - Basic build and run instructions.
+- Look for common project metadata files to infer the tech stack and tooling:
+  - For Rust: `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`.
+  - For JavaScript/TypeScript: `package.json`, `tsconfig.json`, `vite.config.*`, `webpack.config.*`.
+  - For Python: `pyproject.toml`, `requirements.txt`, `setup.cfg`, `tox.ini`.
+  - For Java: `pom.xml`, `build.gradle`, `settings.gradle`.
+  - For .NET: `*.csproj`, `Directory.Build.props`, `global.json`.
+  - For other ecosystems, inspect the main project files in the repo root or top-level subdirectories.
 
-<WhatToAdd>
+When unsure which stack is in use, list the files in the repository root and look for the recognized manifest files above before making changes.
 
-Add the following high level details about the codebase to reduce the amount of searching the agent has to do to understand the codebase each time:
-<HighLevelDetails>
+## 2. Building and running
 
-- A summary of what the repository does.
-- High level repository information, such as the size of the repo, the type of the project, the languages, frameworks, or target runtimes in use.
-</HighLevelDetails>
+Before attempting any build or test:
 
-Add information about how to build and validate changes so the agent does not need to search and find it each time.
-<BuildInstructions>
+1. Check `README.md` and any `CONTRIBUTING.md` or `docs/` files for explicit setup or build instructions.
+2. If there is a language-specific tool:
+   - Rust: run `cargo build` to compile. Use `cargo run` to execute the binary if applicable.
+   - JavaScript/TypeScript: run `npm install` or `yarn install` once before building or testing.
+   - Python: create and activate a virtual environment if documented, then install dependencies with `pip install -r requirements.txt` or `pip install .` as described.
+   - Java: use `mvn` or `gradle` according to the build file present.
+   - .NET: use `dotnet restore` before `dotnet build` if documented.
 
-- For each of bootstrap, build, test, run, lint, and any other scripted step, document the sequence of steps to take to run it successfully as well as the versions of any runtime or build tools used.
-- Each command should be validated by running it to ensure that it works correctly as well as any preconditions and postconditions.
-- Try cleaning the repo and environment and running commands in different orders and document errors and misbehavior observed as well as any steps used to mitigate the problem.
-- Run the tests and document the order of steps required to run the tests.
-- Make a change to the codebase. Document any unexpected build issues as well as the workarounds.
-- Document environment setup steps that seem optional but that you have validated are actually required.
-- Document the time required for commands that failed due to timing out.
-- When you find a sequence of commands that work for a particular purpose, document them in detail.
-- Use language to indicate when something should always be done. For example: "always run npm install before building".
-- Record any validation steps from documentation.
-</BuildInstructions>
+Always prefer the exact commands and versions documented in this repository over inferred defaults.
 
-List key facts about the layout and architecture of the codebase to help the agent find where to make changes with minimal searching.
-<ProjectLayout>
+## 3. Testing and validation
 
-- A description of the major architectural elements of the project, including the relative paths to the main project files, the location
-of configuration files for linting, compilation, testing, and preferences.
-- A description of the checks run prior to check in, including any GitHub workflows, continuous integration builds, or other validation pipelines.
-- Document the steps so that the agent can replicate these itself.
-- Any explicit validation steps that the agent can consider to have further confidence in its changes.
-- Dependencies that aren't obvious from the layout or file structure.
-- Finally, fill in any remaining space with detailed lists of the following, in order of priority: the list of files in the repo root, the
-contents of the README, the contents of any key source files, the list of files in the next level down of directories, giving priority to the more structurally important and snippets of code from key source files, such as the one containing the main method.
-</ProjectLayout>
-</WhatToAdd>
+- Search the repository for test-related files and scripts:
+  - Rust: `cargo test` (unit/doc/integration tests), `cargo clippy` (linter), `cargo fmt` (formatter).
+  - JavaScript/TypeScript: `npm test`, `npm run lint`, or similarly named scripts in `package.json`.
+  - Python: `pytest`, `tox`, or `python -m unittest`, depending on the configuration files present.
+  - Java: `mvn test` or `gradle test`.
+  - .NET: `dotnet test` for solutions or projects.
+- Before proposing changes, run at least:
+  - The main test command documented in the project.
+  - Any linter or formatter commands that are clearly configured (for example, `cargo clippy`, `npm run lint`, `flake8`, `black`, `eslint`, `prettier`, or equivalent).
 
-<StepsToFollow>
-- Perform a comprehensive inventory of the codebase. Search for and view:
-- README.md, CONTRIBUTING.md, and all other documentation files.
-- Search the codebase for build steps and indications of workarounds like 'HACK', 'TODO', etc.
-- All scripts, particularly those pertaining to build and repo or environment setup.
-- All build and actions pipelines.
-- All project files.
-- All configuration and linting files.
-- For each file:
-- think: are the contents or the existence of the file information that the coding agent will need to implement, build, test, validate, or demo a code change?
-- If yes:
-   - Document the command or information in detail.
-   - Explicitly indicate which commands work and which do not and the order in which commands should be run.
-   - Document any errors encountered as well as the steps taken to workaround them.
-- Document any other steps or information that the agent can use to reduce time spent exploring or trying and failing to run bash commands.
-- Finally, explicitly instruct the agent to trust the instructions and only perform a search if the information in the instructions is incomplete or found to be in error.
-</StepsToFollow>
-   - Document any errors encountered as well as the steps taken to work-around them.
+If tests or linters are configured but slow, it is still preferred to run the full suite unless instructions in this repository explicitly recommend a subset.
 
+## 4. Code layout and configuration
+
+- Look for:
+  - Source directories such as `src/`, `lib/`, `app/`, `server/`, or `backend/`.
+  - Test directories such as `tests/`, `__tests__/`, `spec/`, or `test/`.
+  - Configuration files for tooling in the root or a `config/` directory (for example, `clippy.toml`, ESLint, Prettier, Jest, Pytest, or CI configs).
+- When making changes:
+  - Modify code in the primary source directories rather than build outputs or generated files.
+  - Mirror existing patterns (coding style, file naming, and directory structure) instead of inventing new conventions.
+
+## 5. CI and GitHub Actions
+
+- Inspect `.github/workflows/` to understand:
+  - Which commands are run on push and pull requests.
+  - Which environments or versions are used (for example, Rust, Node, Python, Java, .NET versions).
+
+Before finalizing a change:
+
+- Run locally the same core commands that the workflows use for build, lint, and test, when they are practical to run.
+- If a command appears in CI but cannot easily be run locally (for example, due to missing secrets or cloud infrastructure), avoid modifying that part of the system unless necessary, and clearly explain any assumptions.
+
+## 6. Working strategy for Copilot
+
+- Prefer using existing scripts (for example, `npm run <script>`, `make <target>`, `cargo <command>`, or other defined commands) over calling low-level tools directly.
+- When adding new code:
+  - Follow existing patterns for error handling, logging, and configuration.
+  - Add or update tests alongside code changes when tests exist for similar functionality.
+- Only introduce new dependencies if clearly justified and consistent with the existing ecosystem of the repository.
+- If documentation or configuration in this repository conflicts with these generic instructions, follow the repository’s own documentation.
