@@ -151,7 +151,7 @@ pub fn buckify_root_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
     // emit buck rules for lib targets
     for lib_target in &lib_targets {
         let buckal_name = if bin_targets.iter().any(|b| b.name == lib_target.name) {
-            format!(":{}-lib", lib_target.name)
+            format!("{}-lib", lib_target.name)
         } else {
             lib_target.name.to_owned()
         };
