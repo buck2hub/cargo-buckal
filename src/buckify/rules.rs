@@ -142,7 +142,7 @@ pub fn buckify_root_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
             // Cargo allows `main.rs` to use items from `lib.rs` via the crate's own name by default.
             rust_binary
                 .deps_mut()
-                .insert(format!("{}-lib", bin_target.name));
+                .insert(format!(":{}-lib", bin_target.name));
         }
 
         buck_rules.push(Rule::RustBinary(rust_binary));
