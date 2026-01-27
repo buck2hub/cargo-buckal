@@ -16,11 +16,11 @@ pub struct BuildArgs {
     #[arg(short, long)]
     pub release: bool,
 
-    /// Use verbose output (-vv very verbose output)
+    /// Use verbose output (`-vv` very verbose output)
     #[arg(short, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
-    /// Build the library
+    /// Build the package’s library
     #[arg(long)]
     pub lib: bool,
 
@@ -28,7 +28,7 @@ pub struct BuildArgs {
     #[arg(long, value_name = "NAME")]
     pub bin: Vec<String>,
 
-    /// Build all binaries
+    /// Build all binary targets
     #[arg(long)]
     pub bins: bool,
 
@@ -36,7 +36,7 @@ pub struct BuildArgs {
     #[arg(long, value_name = "NAME")]
     pub example: Vec<String>,
 
-    /// Build all examples
+    /// Build all example targets
     #[arg(long)]
     pub examples: bool,
 
@@ -44,7 +44,7 @@ pub struct BuildArgs {
     #[arg(long)]
     pub all_targets: bool,
 
-    /// Build for the target platform (passed to buck2 --target-platforms)
+    /// Build for the target platform (passed to buck2 `--target-platforms`)
     #[arg(long, value_name = "PLATFORM")]
     pub target_platforms: Option<String>,
 }

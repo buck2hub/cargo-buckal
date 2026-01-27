@@ -17,20 +17,26 @@ use crate::{
 
 #[derive(Parser, Debug)]
 pub struct AddArgs {
+    /// Package to add as a dependency
     pub package: String,
 
+    /// Add dependencies in workspace mode
     #[arg(long, short = 'W')]
     pub workspace: bool,
 
+    /// Space or comma separated list of features to activate
     #[arg(long, short = 'F')]
     pub features: Option<String>,
 
+    /// Rename the dependency
     #[arg(long)]
     pub rename: Option<String>,
 
+    /// Add as a development dependency
     #[arg(long, default_value = "false")]
     pub dev: bool,
 
+    /// Add as a build dependency
     #[arg(long, default_value = "false")]
     pub build: bool,
 }

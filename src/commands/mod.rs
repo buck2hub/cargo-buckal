@@ -8,4 +8,3 @@ pub mod new;
 pub mod remove;
 pub mod test;
 pub mod update;
-pub mod version;

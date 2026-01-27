@@ -18,15 +18,19 @@ use crate::{
 
 #[derive(Parser, Debug)]
 pub struct RemoveArgs {
+    /// Package(s) to remove
     #[clap(value_name = "DEP_ID", num_args = 1..)]
     pub packages: Vec<String>,
 
+    /// Remove dependencies in workspace mode
     #[arg(long, short = 'W')]
     pub workspace: bool,
 
+    /// Remove from dev-dependencies
     #[arg(long, default_value = "false")]
     pub dev: bool,
 
+    /// Remove from build-dependencies
     #[arg(long, default_value = "false")]
     pub build: bool,
 }

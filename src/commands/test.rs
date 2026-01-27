@@ -12,12 +12,8 @@ use std::collections::HashSet;
 use std::process::exit;
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "test",
-    about = "Execute all unit and integration tests and build examples of a local package"
-)]
 pub struct TestArgs {
-    /// Package to test
+    /// Package to run tests for
     #[arg(short, long, value_name = "SPEC")]
     pub package: Vec<String>,
 
@@ -33,7 +29,7 @@ pub struct TestArgs {
     #[arg(long)]
     pub all_targets: bool,
 
-    /// Test only this package's library unit tests
+    /// Test only this package's library
     #[arg(long)]
     pub lib: bool,
 
@@ -57,7 +53,7 @@ pub struct TestArgs {
     #[arg(long, value_name = "NAME")]
     pub test: Vec<String>,
 
-    /// Test all tests
+    /// Test all targets that have `test = true` set
     #[arg(long)]
     pub tests: bool,
 
@@ -81,15 +77,11 @@ pub struct TestArgs {
     #[arg(short, long)]
     pub release: bool,
 
-    /// Build artifacts with the specified profile
-    #[arg(long, value_name = "PROFILE-NAME")]
-    pub profile: Option<String>,
-
-    /// Test only the specified test target (positional argument)
+    /// If specified, only run tests containing this string in their names
     #[arg(value_name = "TESTNAME")]
     pub test_name: Option<String>,
 
-    /// Arguments for the test binary
+    /// Arguments for the test executor
     #[arg(last = true)]
     pub args: Vec<String>,
 }
@@ -164,8 +156,6 @@ pub fn execute(args: &TestArgs) {
 
     if args.release {
         cmd = cmd.arg("-m").arg("release");
-    } else if let Some(profile) = &args.profile {
-        cmd = cmd.arg("-m").arg(profile);
     }
 
     if args.no_fail_fast {

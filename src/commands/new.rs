@@ -17,17 +17,24 @@ use crate::{
 
 #[derive(Parser, Debug)]
 pub struct NewArgs {
+    /// Path to create the new package
     pub path: String,
+    /// Use a binary (application) template [default]
     #[arg(long, default_value = "false")]
     pub bin: bool,
+    /// Use a library template
     #[arg(long, default_value = "false")]
     pub lib: bool,
+    /// Specify the Rust edition to use
     #[arg(long)]
     pub edition: Option<String>,
+    /// Set the package name
     #[arg(long)]
     pub name: Option<String>,
+    /// Create only a Buck2 project without Cargo initialization
     #[arg(long, default_value = "false", conflicts_with_all = ["bin", "lib", "edition", "name"])]
     pub repo: bool,
+    /// Set up a Buck2 project with a simple package
     #[arg(long, default_value = "false", conflicts_with = "repo")]
     pub lite: bool,
 }
