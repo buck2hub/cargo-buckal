@@ -22,19 +22,19 @@ jobs:
 
     steps:
       - name: Download linux-generated artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ inputs.project_name }}-gen-linux
           path: gen-linux
 
       - name: Download macos-generated artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ inputs.project_name }}-gen-macos
           path: gen-macos
 
       - name: Download windows-generated artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ inputs.project_name }}-gen-windows
           path: gen-windows
