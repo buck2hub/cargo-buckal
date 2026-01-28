@@ -12,6 +12,10 @@ use std::collections::HashSet;
 use std::process::exit;
 
 #[derive(Parser, Debug)]
+#[command(
+    name = "test",
+    about = "Execute all unit and integration tests and build examples of a local package"
+)]
 pub struct TestArgs {
     /// Package to run tests for
     #[arg(short, long, value_name = "SPEC")]
@@ -165,16 +169,12 @@ pub fn execute(args: &TestArgs) {
     if !args.no_run {
         let mut raw_args = Vec::new();
 
-        if let Some(name) = &args.test_name {
-            raw_args.push(name.clone());
-        }
-
         raw_args.extend_from_slice(&args.args);
 
         if !raw_args.is_empty() {
             cmd = cmd.arg("--");
             for arg in raw_args {
-                cmd = cmd.arg("--test-arg").arg(arg);
+                cmd = cmd.arg(arg);
             }
         }
     }
