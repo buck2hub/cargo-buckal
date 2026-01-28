@@ -45,8 +45,6 @@ jobs:
 
       - name: Setup Rust toolchains
         uses: ./cargo-buckal/.github/actions/setup-rust-toolchains
-        with:
-          nightly_toolchain: nightly-2025-08-01
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2

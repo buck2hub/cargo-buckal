@@ -1,9 +1,13 @@
 use clap::Parser;
+use serde::Deserialize;
 
 use crate::{
     buck2::Buck2Command,
     buckal_error, buckal_log,
-    utils::{UnwrapOrExit, check_buck2_package, ensure_prerequisites, get_buck2_root},
+    utils::{
+        UnwrapOrExit, check_buck2_package, ensure_prerequisites, get_buck2_root, get_target,
+        platform_exists,
+    },
 };
 
 #[derive(Parser, Debug)]
@@ -12,11 +16,11 @@ pub struct BuildArgs {
     #[arg(short, long)]
     pub release: bool,
 
-    /// Use verbose output (-vv very verbose output)
+    /// Use verbose output (`-vv` very verbose output)
     #[arg(short, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
-    /// Build the library
+    /// Build the package’s library
     #[arg(long)]
     pub lib: bool,
 
@@ -24,7 +28,7 @@ pub struct BuildArgs {
     #[arg(long, value_name = "NAME")]
     pub bin: Vec<String>,
 
-    /// Build all binaries
+    /// Build all binary targets
     #[arg(long)]
     pub bins: bool,
 
@@ -32,13 +36,17 @@ pub struct BuildArgs {
     #[arg(long, value_name = "NAME")]
     pub example: Vec<String>,
 
-    /// Build all examples
+    /// Build all example targets
     #[arg(long)]
     pub examples: bool,
 
     /// Build all targets
     #[arg(long)]
     pub all_targets: bool,
+
+    /// Build for the target platform (passed to buck2 `--target-platforms`)
+    #[arg(long, value_name = "PLATFORM")]
+    pub target_platforms: Option<String>,
 }
 
 impl BuildArgs {
@@ -100,14 +108,14 @@ pub fn execute(args: &BuildArgs) {
 
     // Determine build targets based on selection arguments
     let targets = if args.all_targets {
-        // Build all targets in the current directory
-        vec![format!("//{relative_path}...")]
+        // Build all first-party Rust targets (avoid third-party //...).
+        get_available_targets_all(&relative_path)
     } else if args.has_target_selection() {
         // Build specific targets based on selection
         build_specific_targets(args, &relative_path)
     } else {
-        // Default: build all targets (backward compatibility)
-        vec![format!("//{relative_path}...")]
+        // Default: build first-party Rust targets under the current directory.
+        get_available_targets(&relative_path)
     };
 
     if targets.is_empty() {
@@ -115,11 +123,25 @@ pub fn execute(args: &BuildArgs) {
         std::process::exit(1);
     }
 
+    let target_platforms = if let Some(platform) = &args.target_platforms {
+        Some(platform.clone())
+    } else {
+        let platform = format!("//platforms:{}", get_target());
+        if platform_exists(&platform) {
+            Some(platform)
+        } else {
+            None
+        }
+    };
+
     // Execute build for each target
     for target in targets {
         let mut buck2_cmd = Buck2Command::build(&target).verbosity(args.verbose);
         if args.release {
             buck2_cmd = buck2_cmd.arg("-m").arg("release");
+        }
+        if let Some(platform) = &target_platforms {
+            buck2_cmd = buck2_cmd.arg("--target-platforms").arg(platform);
         }
 
         let result = buck2_cmd.status();
@@ -181,27 +203,78 @@ fn build_specific_targets(args: &BuildArgs, relative_path: &str) -> Vec<String> 
 }
 
 /// Get available targets from Buck2
+#[derive(Debug, Deserialize)]
+struct TargetEntry {
+    #[serde(rename = "buck.type")]
+    buck_type: String,
+    #[serde(rename = "buck.package")]
+    buck_package: String,
+    name: String,
+}
+
 fn get_available_targets(relative_path: &str) -> Vec<String> {
+    get_available_targets_by_kind(relative_path, false)
+}
+
+fn get_available_targets_all(relative_path: &str) -> Vec<String> {
+    get_available_targets_by_kind(relative_path, true)
+}
+
+fn get_available_targets_by_kind(relative_path: &str, include_tests: bool) -> Vec<String> {
     let target_pattern = format!("//{relative_path}...");
 
     match Buck2Command::targets()
         .arg(&target_pattern)
-        .arg("--type")
-        .arg("rust_library")
-        .arg("--type")
-        .arg("rust_binary")
+        .arg("--output-basic-attributes")
+        .arg("--json")
         .output()
     {
-        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect(),
+        Ok(output) if output.status.success() => {
+            match serde_json::from_slice::<Vec<TargetEntry>>(&output.stdout) {
+                Ok(entries) => {
+                    let targets = entries
+                        .into_iter()
+                        .filter(|entry| {
+                            entry.buck_type.ends_with(":rust_binary")
+                                || entry.buck_type.ends_with(":rust_library")
+                                || (include_tests && entry.buck_type.ends_with(":rust_test"))
+                        })
+                        .map(|entry| {
+                            let package = entry
+                                .buck_package
+                                .strip_prefix("root//")
+                                .unwrap_or(entry.buck_package.as_str())
+                                .trim_end_matches('/');
+                            if package.is_empty() {
+                                format!("//:{}", entry.name)
+                            } else {
+                                format!("//{}:{}", package, entry.name)
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    filter_root_third_party(targets, relative_path)
+                }
+                Err(_) => vec![target_pattern],
+            }
+        }
         _ => {
             // If we can't get specific targets, fall back to all targets
             vec![target_pattern]
         }
     }
+}
+
+fn filter_root_third_party(mut targets: Vec<String>, relative_path: &str) -> Vec<String> {
+    if !relative_path.is_empty() {
+        return targets;
+    }
+
+    targets.retain(|target| {
+        !target.starts_with("//third-party/")
+            && !target.starts_with("//toolchains/")
+            && !target.starts_with("//platforms/")
+    });
+    targets
 }
 
 /// Get library targets
@@ -407,6 +480,7 @@ mod tests {
             example: vec![],
             examples: false,
             all_targets: false,
+            target_platforms: None,
         };
         assert!(args.validate_target_selection().is_ok());
 
@@ -419,6 +493,7 @@ mod tests {
             example: vec![],
             examples: false,
             all_targets: false,
+            target_platforms: None,
         };
         assert!(args.validate_target_selection().is_ok());
 
@@ -432,6 +507,7 @@ mod tests {
             example: vec![],
             examples: false,
             all_targets: true,
+            target_platforms: None,
         };
         assert!(args.validate_target_selection().is_ok());
 
@@ -445,6 +521,7 @@ mod tests {
             example: vec![],
             examples: false,
             all_targets: true,
+            target_platforms: None,
         };
         assert!(args.validate_target_selection().is_err());
     }
@@ -460,6 +537,7 @@ mod tests {
             example: vec![],
             examples: false,
             all_targets: false,
+            target_platforms: None,
         };
         assert!(!args.has_target_selection());
 
@@ -472,6 +550,7 @@ mod tests {
             example: vec![],
             examples: false,
             all_targets: false,
+            target_platforms: None,
         };
         assert!(args.has_target_selection());
 
@@ -484,6 +563,7 @@ mod tests {
             example: vec![],
             examples: false,
             all_targets: false,
+            target_platforms: None,
         };
         assert!(args.has_target_selection());
 
@@ -496,6 +576,7 @@ mod tests {
             example: vec![],
             examples: false,
             all_targets: true,
+            target_platforms: None,
         };
         assert!(args.has_target_selection());
     }
@@ -511,6 +592,7 @@ mod tests {
             example: vec![],
             examples: false,
             all_targets: false,
+            target_platforms: None,
         };
         assert!(!args.has_other_target_selection());
 
@@ -523,6 +605,7 @@ mod tests {
             example: vec![],
             examples: false,
             all_targets: false,
+            target_platforms: None,
         };
         assert!(args.has_other_target_selection());
 
@@ -535,6 +618,7 @@ mod tests {
             example: vec![],
             examples: false,
             all_targets: false,
+            target_platforms: None,
         };
         assert!(args.has_other_target_selection());
 
@@ -547,6 +631,7 @@ mod tests {
             example: vec![],
             examples: false,
             all_targets: true,
+            target_platforms: None,
         };
         assert!(!args.has_other_target_selection());
     }
@@ -760,6 +845,7 @@ mod tests {
             example: vec!["demo*".to_string()],
             examples: false,
             all_targets: false,
+            target_platforms: None,
         };
 
         assert!(args.has_target_selection());

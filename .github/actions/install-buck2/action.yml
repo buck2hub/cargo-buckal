@@ -5,7 +5,7 @@ inputs:
   version:
     description: 'Buck2 release version (e.g., 2026-01-02, latest)'
     required: false
-    default: '2026-01-02'
+    default: 'latest'
 
 runs:
   using: "composite"
@@ -22,22 +22,22 @@ runs:
           macOS-ARM64) PLATFORM="aarch64-apple-darwin" ;;
           *) echo "Unsupported platform: ${{ runner.os }}-${{ runner.arch }}"; exit 1 ;;
         esac
-        
+
         VERSION="${{ inputs.version }}"
         URL="https://github.com/facebook/buck2/releases/download/${VERSION}/buck2-${PLATFORM}.zst"
-        
+
         echo "Downloading buck2 from $URL"
         mkdir -p "$HOME/.cargo/bin"
-        if [ ! -x "$HOME/.cargo/bin/buck2" ]; then
+        if [ "$VERSION" = "latest" ] || [ ! -x "$HOME/.cargo/bin/buck2" ]; then
           curl -fsSL "$URL" | zstd -d -o "$HOME/.cargo/bin/buck2"
           chmod +x "$HOME/.cargo/bin/buck2"
         else
           echo "buck2 already exists (cached), skipping download"
         fi
-        
+
         echo "Verifying buck2 installation..."
         "$HOME/.cargo/bin/buck2" --version
-        
+
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
     - name: Install Buck2 (Windows)
@@ -47,29 +47,29 @@ runs:
         $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE\.cargo" }
         $binDir = "$cargoHome\bin"
         New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-        
+
         $version = "${{ inputs.version }}"
         $buck2Url = "https://github.com/facebook/buck2/releases/download/${version}/buck2-x86_64-pc-windows-msvc.exe.zst"
         $zstFile = "$binDir\buck2.exe.zst"
         $buck2Exe = "$binDir\buck2.exe"
-        
+
         Write-Host "Downloading buck2 from $buck2Url"
-        if (-not (Test-Path $buck2Exe)) {
+        if (($version -eq "latest") -or (-not (Test-Path $buck2Exe))) {
           Invoke-WebRequest -Uri $buck2Url -OutFile $zstFile
-          
+
           if (-not (Get-Command zstd -ErrorAction SilentlyContinue)) {
             Write-Host "Installing zstd..."
             choco install zstd -y --no-progress
           }
-          
+
           Write-Host "Decompressing buck2..."
           zstd -d $zstFile -o $buck2Exe -f
           Remove-Item $zstFile -Force
         } else {
           Write-Host "buck2 already exists (cached), skipping download"
         }
-        
+
         Write-Host "Verifying buck2 installation..."
         & $buck2Exe --version
-        
+
         "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append

@@ -39,7 +39,21 @@ If a predicate can’t be mapped to `linux`/`macos`/`windows`, cargo-buckal trea
    cargo buckal migrate --fetch
    ```
 
-2. Build with a target platform:
+2. Build with `cargo buckal build`:
+
+   Without `--target-platforms`, builds for the host platform:
+
+   ```bash
+   cargo buckal build //...
+   ```
+
+   With `--target-platforms`, builds for a specific target platform:
+
+   ```bash
+   cargo buckal build //... --target-platforms //platforms:x86_64-pc-windows-msvc
+   ```
+
+   You can also use `buck2 build` directly:
 
    ```bash
    buck2 build //... --target-platforms //platforms:x86_64-pc-windows-msvc
@@ -59,19 +73,19 @@ If a predicate can’t be mapped to `linux`/`macos`/`windows`, cargo-buckal trea
    Linux:
 
    ```bash
-   buck2 build //... --target-platforms //platforms:x86_64-unknown-linux-gnu
+   cargo buckal build //... --target-platforms //platforms:x86_64-unknown-linux-gnu
    ```
 
    Windows:
 
    ```bash
-   buck2 build //... --target-platforms //platforms:x86_64-pc-windows-msvc
+   cargo buckal build //... --target-platforms //platforms:x86_64-pc-windows-msvc
    ```
 
    macOS (bundled sample platforms):
 
    ```bash
-   buck2 build //... --target-platforms //platforms:aarch64-apple-darwin
+   cargo buckal build //... --target-platforms //platforms:aarch64-apple-darwin
    ```
 
 ### Skipping tests for cross-compilation
@@ -84,8 +98,8 @@ that matches the `//platforms:cross` config setting when this config is set.
 Examples:
 
 ```bash
-buck2 test //... --target-platforms //platforms:x86_64-unknown-linux-gnu -c cross.skip_test=true
-buck2 test //... --target-platforms //platforms:x86_64-pc-windows-msvc -c cross.skip_test=true
+cargo buckal test //... --target-platforms //platforms:x86_64-unknown-linux-gnu -c cross.skip_test=true
+cargo buckal test //... --target-platforms //platforms:x86_64-pc-windows-msvc -c cross.skip_test=true
 ```
 
 ## Troubleshooting

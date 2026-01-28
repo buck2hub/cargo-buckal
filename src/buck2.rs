@@ -86,6 +86,11 @@ impl Buck2Command {
     pub fn targets() -> Self {
         Self::new().subcommand("targets")
     }
+
+    /// Create a uquery command
+    pub fn uquery() -> Self {
+        Self::new().subcommand("uquery")
+    }
 }
 
 impl Default for Buck2Command {

@@ -3,7 +3,7 @@
 # This workflow:
 # 1. Downloads generated artifacts from the generate phase
 # 2. Sets up cross-compilation toolchains
-# 3. Builds and optionally tests with Buck2
+# 3. Builds and optionally tests with cargo buckal
 
 name: Build and Test Buck2
 
@@ -34,11 +34,6 @@ on:
         required: false
         type: boolean
         default: false
-      nightly_toolchain:
-        description: 'Nightly Rust toolchain version'
-        required: false
-        type: string
-        default: 'nightly-2025-08-01'
 
 jobs:
   test:
@@ -74,6 +69,14 @@ jobs:
           sparse-checkout: .github/actions
 
       # ============================================================
+      # Checkout cargo-buckal source for installation
+      # ============================================================
+      - name: Checkout cargo-buckal (for installation)
+        uses: actions/checkout@v6
+        with:
+          path: cargo-buckal-src
+
+      # ============================================================
       # Windows-specific setup
       # ============================================================
       - name: Setup Windows environment
@@ -94,7 +97,6 @@ jobs:
       - name: Setup Rust toolchains
         uses: ./cargo-buckal/.github/actions/setup-rust-toolchains
         with:
-          nightly_toolchain: ${{ inputs.nightly_toolchain }}
           targets: ${{ matrix.target }}
 
       # ============================================================
@@ -112,6 +114,15 @@ jobs:
         uses: ./cargo-buckal/.github/actions/install-buck2
 
       # ============================================================
+      # Install cargo-buckal
+      # ============================================================
+      - name: Install cargo-buckal
+        shell: bash
+        run: |
+          cd cargo-buckal-src
+          cargo install --locked --path .
+
+      # ============================================================
       # Show version information
       # ============================================================
       - name: Show version information
@@ -124,24 +135,37 @@ jobs:
           rustc -V
           echo "=== Buck2 ==="
           buck2 --version || buck2 -V || true
+          echo "=== cargo-buckal ==="
+          cargo buckal --version || true
           echo "=== GCC ==="
           gcc --version || true
 
       # ============================================================
-      # Buck2 build
+      # cargo buckal build
       # ============================================================
-      - name: Buck2 build
+      - name: cargo buckal build
         shell: bash
         run: |
           cd "${{ inputs.project_dir || inputs.project_name }}"
-          buck2 build ${{ inputs.build_target }} --target-platforms //platforms:${{ matrix.target }}
+          cargo buckal build --all-targets
+      - name: cargo buckal build (target-platforms)
+        shell: bash
+        run: |
+          cd "${{ inputs.project_dir || inputs.project_name }}"
+          cargo buckal build --all-targets --target-platforms //platforms:${{ matrix.target }}
 
       # ============================================================
-      # Buck2 test
+      # cargo buckal test
       # ============================================================
-      - name: Buck2 test
+      - name: cargo buckal test
         if: inputs.run_tests
         shell: bash
         run: |
           cd "${{ inputs.project_dir || inputs.project_name }}"
-          buck2 test //... --target-platforms //platforms:${{ matrix.target }}
+          cargo buckal test --workspace
+      - name: cargo buckal test (target-platforms)
+        if: inputs.run_tests
+        shell: bash
+        run: |
+          cd "${{ inputs.project_dir || inputs.project_name }}"
+          cargo buckal test --workspace --target-platforms //platforms:${{ matrix.target }}

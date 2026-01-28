@@ -74,16 +74,20 @@ fn resolve_first_party_label(dep_package: &Package) -> Result<String> {
         );
     }
 
-    let buckal_name = if dep_bin_targets
+    let buckal_name = resolve_buckal_name(&dep_bin_targets, &dep_lib_targets);
+
+    Ok(format!("//{relative_path}:{buckal_name}"))
+}
+
+fn resolve_buckal_name(dep_bin_targets: &[&Target], dep_lib_targets: &[&Target]) -> String {
+    if dep_bin_targets
         .iter()
         .any(|b| b.name == dep_lib_targets[0].name)
     {
-        format!("lib{}", dep_lib_targets[0].name)
+        format!("{}-lib", dep_lib_targets[0].name)
     } else {
         dep_lib_targets[0].name.to_owned()
-    };
-
-    Ok(format!("//{relative_path}:{buckal_name}"))
+    }
 }
 
 fn resolve_dep_label(
@@ -268,4 +272,50 @@ pub(super) fn set_deps(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cargo_metadata::TargetKind;
+
+    fn mock_target(name: &str, kind: TargetKind) -> Target {
+        // Target struct construction is verbose, using a helper or json deserialization might be easier
+        // but let's try strict construction if possible, or use serde_json
+        serde_json::from_value(serde_json::json!({
+            "name": name,
+            "kind": [kind],
+            "crate_types": [],
+            "required_features": [],
+            "src_path": "/tmp/dummy.rs",
+            "edition": "2021",
+            "doctest": true,
+            "test": true
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn test_resolve_buckal_name_with_collision() {
+        let lib = mock_target("foo", TargetKind::Lib);
+        let bin = mock_target("foo", TargetKind::Bin);
+
+        let lib_targets = vec![&lib];
+        let bin_targets = vec![&bin];
+
+        let name = resolve_buckal_name(&bin_targets, &lib_targets);
+        assert_eq!(name, "foo-lib");
+    }
+
+    #[test]
+    fn test_resolve_buckal_name_without_collision() {
+        let lib = mock_target("foo", TargetKind::Lib);
+        let bin = mock_target("bar", TargetKind::Bin);
+
+        let lib_targets = vec![&lib];
+        let bin_targets = vec![&bin];
+
+        let name = resolve_buckal_name(&bin_targets, &lib_targets);
+        assert_eq!(name, "foo");
+    }
 }

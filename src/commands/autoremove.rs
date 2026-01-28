@@ -11,6 +11,7 @@ use crate::{
 
 #[derive(Parser, Debug)]
 pub struct AutoremoveArgs {
+    /// Don’t actually remove the dependencies
     #[arg(name = "dry-run", long, default_value = "false")]
     pub dry_run: bool,
 }

@@ -14,12 +14,15 @@ use crate::{
 
 #[derive(Parser, Debug)]
 pub struct UpdateArgs {
+    /// Package to update
     #[clap(value_name = "SPEC", num_args = 0..)]
     pub packages: Vec<String>,
 
+    /// Only update the workspace packages
     #[arg(long, short = 'w')]
     pub workspace: bool,
 
+    /// Don't actually write the lockfile
     #[arg(long)]
     pub dry_run: bool,
 }

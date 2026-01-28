@@ -30,11 +30,6 @@ on:
         required: false
         type: string
         default: ''
-      nightly_toolchain:
-        description: 'Nightly Rust toolchain version'
-        required: false
-        type: string
-        default: 'nightly-2025-08-01'
       clean_existing_buck2_and_buckal:
         description: 'Clean existing Buck2/Buckal files before generating'
         required: false
@@ -87,8 +82,6 @@ jobs:
 
       - name: Setup Rust toolchains
         uses: ./cargo-buckal/.github/actions/setup-rust-toolchains
-        with:
-          nightly_toolchain: ${{ inputs.nightly_toolchain }}
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2

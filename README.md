@@ -52,6 +52,21 @@ buck2_binary = "/path/to/your/buck2"
 
 If no configuration file exists, cargo-buckal will use `buck2` (searches your PATH).
 
+## Pre-commit Hooks
+
+This project uses [prek](https://github.com/j178/prek) for pre-commit hooks (configured in `.pre-commit-config.yaml`).
+Install `prek` following the project instructions, then set up the git hooks:
+
+```
+prek install
+```
+
+To run hooks on all files at any time:
+
+```
+prek run --all-files
+```
+
 ## Repos using cargo-buckal
 
 - `rk8s`: https://github.com/rk8s-dev/rk8s

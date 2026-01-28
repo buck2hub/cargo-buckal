@@ -392,7 +392,7 @@ mod tests {
               prelude = prelude
               toolchains = toolchains
               none = none
-                
+
             [cell_aliases]
               config = prelude
               ovr_config = prelude
@@ -400,17 +400,17 @@ mod tests {
               fbsource = none
               fbcode_macros = none
               buck = none
-                
+
             # Uses a copy of the prelude bundled with the buck2 binary. You can alternatively delete this
             # section and vendor a copy of the prelude to the `prelude` directory of your project.
             [external_cells]
               prelude = bundled
-                
+
             [parser]
               target_platform_detector_spec = target:root//...->prelude//platforms:default \
                 target:prelude//...->prelude//platforms:default \
                 target:toolchains//...->prelude//platforms:default
-                
+
             [build]
               execution_platforms = prelude//platforms:default
         "#};
@@ -427,7 +427,7 @@ mod tests {
               key2 = value2
 
             # This comment has a blank line before the next section
-            
+
             [section_b]
               key3 = value3
         "#};

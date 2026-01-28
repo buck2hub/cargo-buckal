@@ -320,6 +320,18 @@ pub fn get_buck2_root() -> io::Result<Utf8PathBuf> {
     }
 }
 
+/// Check if a platform target exists using buck2 uquery
+pub fn platform_exists(platform_target: &str) -> bool {
+    let output = crate::buck2::Buck2Command::uquery()
+        .arg(platform_target)
+        .output();
+
+    match output {
+        Ok(o) => o.status.success(),
+        Err(_) => false,
+    }
+}
+
 pub fn check_buck2_package() -> io::Result<()> {
     // This function checks if the current directory is a valid Buck2 package.
     let cwd = std::env::current_dir().expect("Failed to get current directory");
