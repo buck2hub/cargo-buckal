@@ -162,16 +162,12 @@ pub fn execute(args: &TestArgs) {
     if !args.no_run {
         let mut raw_args = Vec::new();
 
-        if let Some(name) = &args.test_name {
-            raw_args.push(name.clone());
-        }
-
         raw_args.extend_from_slice(&args.args);
 
         if !raw_args.is_empty() {
             cmd = cmd.arg("--");
             for arg in raw_args {
-                cmd = cmd.arg("--test-arg").arg(arg);
+                cmd = cmd.arg(arg);
             }
         }
     }
@@ -191,13 +187,11 @@ fn resolve_targets(
     let mut patterns = Vec::new();
     let mut specific_found = false;
 
-    // Build a set of workspace members to filter out third-party dependencies efficiently
     let workspace_members: HashSet<_> = metadata.workspace_members.iter().collect();
 
     if let Some(name) = &args.test_name {
         if is_glob_pattern(name) {
             for pkg in &metadata.packages {
-                // Critical Filter: Only look at workspace members
                 if !workspace_members.contains(&pkg.id) {
                     continue;
                 }
@@ -220,7 +214,6 @@ fn resolve_targets(
             let mut found_in_metadata = false;
 
             for pkg in &metadata.packages {
-                // Critical Filter: Only look at workspace members
                 if !workspace_members.contains(&pkg.id) {
                     continue;
                 }
@@ -273,7 +266,6 @@ fn resolve_targets(
             };
 
             for pkg in &metadata.packages {
-                // Critical Filter: Only look at workspace members
                 if !workspace_members.contains(&pkg.id) {
                     continue;
                 }
@@ -325,7 +317,6 @@ fn resolve_targets(
 
     if has_kind_selection {
         for pkg in &metadata.packages {
-            // Critical Filter: Either explicit package match OR workspace member
             let is_workspace_member = workspace_members.contains(&pkg.id);
 
             if !args.package.is_empty() {
@@ -333,7 +324,6 @@ fn resolve_targets(
                     continue;
                 }
             } else if !is_workspace_member {
-                // If no package arg is specified, skip all non-workspace members (e.g. dependencies)
                 continue;
             }
 
