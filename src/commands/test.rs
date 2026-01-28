@@ -14,7 +14,7 @@ use std::process::exit;
     about = "Execute all unit and integration tests and build examples of a local package"
 )]
 pub struct TestArgs {
-    /// Package to test
+    /// Package for test
     #[arg(short, long, value_name = "SPEC")]
     pub package: Vec<String>,
 
