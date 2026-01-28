@@ -65,7 +65,7 @@ jobs:
     steps:
       # Checkout the repository at the appropriate commit for review
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Use PR head SHA for pull_request_target, fallback to current SHA otherwise
           fetch-depth: 0
