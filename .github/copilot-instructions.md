@@ -7,7 +7,7 @@ These instructions are intended for an automated coding agent (such as GitHub Co
 **What is cargo-buckal?**
 
 cargo-buckal is a Rust CLI tool that bridges Cargo and Buck2, enabling seamless builds and dependency management. Key aspects:
-- Provides `cargo buckal` subcommands: `init`, `new`, `migrate`, `add`, `remove`, `update`, `build`, `test`, `clean`
+- Provides `cargo buckal` subcommands: `init`, `new`, `migrate`, `add`, `remove`, `autoremove`, `update`, `build`, `test`, `clean`
 - Automatically converts Cargo dependency graphs to Buck2 BUCK files
 - Supports platform-aware dependency mapping for Linux, Windows, and macOS
 - Requires Buck2 and Python3 to be installed on the system
