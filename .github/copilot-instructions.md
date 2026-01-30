@@ -1,77 +1,169 @@
-# Copilot instructions for this repository
+# Copilot instructions for cargo-buckal
 
-These instructions are intended for an automated coding agent (such as GitHub Copilot) working in this repository. They describe where to look for important information and how to validate changes.
+These instructions are intended for an automated coding agent (such as GitHub Copilot) working on the cargo-buckal repository. They describe where to look for important information and how to validate changes.
 
-## 1. Understanding the repository
+## 1. Understanding cargo-buckal
 
-- Start by reading `README.md` in the repository root. Treat it as the source of truth for:
-  - What the project does.
-  - Any language, framework, or runtime requirements.
-  - Basic build and run instructions.
-- Look for common project metadata files to infer the tech stack and tooling:
-  - For Rust: `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`.
-  - For JavaScript/TypeScript: `package.json`, `tsconfig.json`, `vite.config.*`, `webpack.config.*`.
-  - For Python: `pyproject.toml`, `requirements.txt`, `setup.cfg`, `tox.ini`.
-  - For Java: `pom.xml`, `build.gradle`, `settings.gradle`.
-  - For .NET: `*.csproj`, `Directory.Build.props`, `global.json`.
-  - For other ecosystems, inspect the main project files in the repo root or top-level subdirectories.
+**What is cargo-buckal?**
 
-When unsure which stack is in use, list the files in the repository root and look for the recognized manifest files above before making changes.
+cargo-buckal is a Rust CLI tool that bridges Cargo and Buck2, enabling seamless builds and dependency management. Key aspects:
+- Provides `cargo buckal` subcommands: `init`, `new`, `migrate`, `add`, `remove`, `update`, `build`, `test`, `clean`
+- Automatically converts Cargo dependency graphs to Buck2 BUCK files
+- Supports platform-aware dependency mapping for Linux, Windows, and macOS
+- Requires Buck2 and Python3 to be installed on the system
+
+**Start with `README.md`** for:
+- Feature overview and common commands
+- Installation instructions
+- Platform support details
+- Configuration guide (`~/.config/buckal/config.toml`)
+- Links to comprehensive documentation at https://buck2hub.com/docs
+
+**Project structure:**
+- This is a **Rust project** with `Cargo.toml` as the primary manifest
+- Source code in `src/`: Core modules (`buck.rs`, `buck2.rs`, `buckify.rs`, etc.)
+- Commands in `src/commands/`: Each command is a separate module (e.g., `migrate.rs`, `add.rs`)
+- Configuration: `.pre-commit-config.yaml`, `.github/workflows/`
+- Assets in `assets/`: BUCK templates and demo files for toolchains
 
 ## 2. Building and running
 
-Before attempting any build or test:
+**Requirements:**
+- Rust toolchain (stable) with `rustfmt` and `clippy` components
+- Buck2 (for full integration testing; cargo build works without it)
+- Python 3.11+ (for pre-commit hooks and Buck2 integration)
 
-1. Check `README.md` and any `CONTRIBUTING.md` or `docs/` files for explicit setup or build instructions.
-2. If there is a language-specific tool:
-   - Rust: run `cargo build` to compile. Use `cargo run` to execute the binary if applicable.
-   - JavaScript/TypeScript: run `npm install` or `yarn install` once before building or testing.
-   - Python: create and activate a virtual environment if documented, then install dependencies with `pip install -r requirements.txt` or `pip install .` as described.
-   - Java: use `mvn` or `gradle` according to the build file present.
-   - .NET: use `dotnet restore` before `dotnet build` if documented.
+**Build commands:**
+```bash
+cargo build              # Debug build
+cargo build --release   # Optimized release build
+cargo run -- --help     # Run with arguments
+```
 
-Always prefer the exact commands and versions documented in this repository over inferred defaults.
+**Running specific commands:**
+Since cargo-buckal is a CLI tool, test it with:
+```bash
+cargo run -- init --help    # View command help
+cargo run -- migrate --help # Test migration logic
+cargo run -- build --help   # Test build command
+```
+
+The tool can be installed locally with `cargo install --path .` for testing installation workflows.
 
 ## 3. Testing and validation
 
-- Search the repository for test-related files and scripts:
-  - Rust: `cargo test` (unit/doc/integration tests), `cargo clippy` (linter), `cargo fmt` (formatter).
-  - JavaScript/TypeScript: `npm test`, `npm run lint`, or similarly named scripts in `package.json`.
-  - Python: `pytest`, `tox`, or `python -m unittest`, depending on the configuration files present.
-  - Java: `mvn test` or `gradle test`.
-  - .NET: `dotnet test` for solutions or projects.
-- Before proposing changes, run at least:
-  - The main test command documented in the project.
-  - Any linter or formatter commands that are clearly configured (for example, `cargo clippy`, `npm run lint`, `flake8`, `black`, `eslint`, `prettier`, or equivalent).
+**Core testing commands:**
+```bash
+cargo build              # Verify compilation
+cargo clippy --all-targets --all-features -- -D warnings  # Linter (strict mode)
+cargo fmt --check       # Check formatting
+cargo fmt --            # Auto-format code
+```
 
-If tests or linters are configured but slow, it is still preferred to run the full suite unless instructions in this repository explicitly recommend a subset.
+**Pre-commit hooks:**
+This project uses `prek` for automated checks:
+```bash
+prek install            # Set up git hooks (run once)
+prek run --all-files    # Run all checks on entire codebase
+```
+
+Pre-commit hooks enforce:
+- `cargo fmt` (Rust formatting)
+- `cargo clippy --all-targets --all-features -- -D warnings` (strict linting)
+- Typos detection, TOML/YAML validation, trailing whitespace
+- Buildifier for BUCK file formatting
+
+**Before submitting changes:**
+1. Ensure `cargo build` succeeds
+2. Run `cargo clippy --all-targets --all-features -- -D warnings` (must have zero warnings)
+3. Run `cargo fmt --check` (or `cargo fmt --` to auto-fix)
+4. Run `prek run --all-files` to check all pre-commit rules
+5. Test the CLI with `cargo run -- <command> --help`
+
+**Note:** The CI workflow (`.github/workflows/build-and-test.yml`) currently has a placeholder test step. Most validation happens via linting and pre-commit hooks.
 
 ## 4. Code layout and configuration
 
-- Look for:
-  - Source directories such as `src/`, `lib/`, `app/`, `server/`, or `backend/`.
-  - Test directories such as `tests/`, `__tests__/`, `spec/`, or `test/`.
-  - Configuration files for tooling in the root or a `config/` directory (for example, `clippy.toml`, ESLint, Prettier, Jest, Pytest, or CI configs).
-- When making changes:
-  - Modify code in the primary source directories rather than build outputs or generated files.
-  - Mirror existing patterns (coding style, file naming, and directory structure) instead of inventing new conventions.
+**Key directories:**
+- `src/main.rs`: CLI entry point using `clap` for argument parsing
+- `src/cli.rs`: Command-line interface definition
+- `src/commands/`: Implementation of all subcommands (`init.rs`, `migrate.rs`, `add.rs`, etc.)
+- `src/buckify/`: Core logic for Cargo→Buck2 conversion
+  - `actions.rs`, `deps.rs`, `emit.rs`: Dependency handling and BUCK file generation
+  - `cross.rs`: Cross-platform dependency logic
+  - `windows.rs`: Windows-specific handling
+- `src/config.rs`: Configuration file handling
+- `src/buck2.rs`, `src/buck.rs`: Buck2 integration
+- `assets/`: BUCK file templates for platforms and toolchains
+
+**Important modules:**
+- `platform.rs`: Platform detection (Linux, macOS, Windows)
+- `cache.rs`: Caching layer
+- `bundles.rs`: Buck2 toolchain bundle management
+- `utils.rs`: Utility functions
+
+**Configuration files:**
+- `.pre-commit-config.yaml`: Pre-commit hooks (cargo fmt, cargo clippy, typos, buildifier)
+- `Cargo.toml`: Rust dependencies and project metadata (edition 2024)
+
+**When making changes:**
+- Modify code in `src/` directories following existing patterns
+- Use `anyhow::Result<T>` for error handling (consistent with codebase)
+- Commands are modular: changes to one command should not affect others
+- Starlark template strings use `serde_starlark` for serialization
 
 ## 5. CI and GitHub Actions
 
-- Inspect `.github/workflows/` to understand:
-  - Which commands are run on push and pull requests.
-  - Which environments or versions are used (for example, Rust, Node, Python, Java, .NET versions).
+**Main CI workflows:**
+- `.github/workflows/build-and-test.yml`: Runs `cargo build` on every PR
+- `.github/workflows/lint.yml`: Runs `prek` (pre-commit hooks) for formatting and linting
+- `.github/workflows/test-init-new-commands.yml`: Tests `cargo buckal init` and `new` commands
+- `.github/workflows/integration-test-*.yml`: Tests against real projects (monorepo-demo, fd, libra, git-internal)
+- `.github/workflows/_buck2-*.yml`: Buck2-related build and verification tests
 
-Before finalizing a change:
+**Custom GitHub Actions:**
+- `.github/actions/setup-rust-toolchains/`: Sets up stable Rust with clippy and rustfmt
+- `.github/actions/install-buck2/`: Installs Buck2 for integration tests
+- `.github/actions/setup_test_env/`: Sets up test environment with Python 3.11+
 
-- Run locally the same core commands that the workflows use for build, lint, and test, when they are practical to run.
-- If a command appears in CI but cannot easily be run locally (for example, due to missing secrets or cloud infrastructure), avoid modifying that part of the system unless necessary, and clearly explain any assumptions.
+**Key points for CI:**
+1. The build workflow checks `cargo build` succeeds on Ubuntu
+2. The lint workflow runs `prek` which enforces `cargo fmt` and `cargo clippy`
+3. Integration tests validate the tool against real-world projects
+4. Placeholders exist for future test enhancements
+
+**Before finalizing changes:**
+1. Run `cargo build` locally (primary CI check)
+2. Run `prek run --all-files` locally (enforces lint/fmt, same as CI)
+3. Verify specific commands with `cargo run -- <subcommand> --help`
+4. If modifying commands, test with `cargo buckal <command>` after `cargo install --path .`
 
 ## 6. Working strategy for Copilot
 
-- Prefer using existing scripts (for example, `npm run <script>`, `make <target>`, `cargo <command>`, or other defined commands) over calling low-level tools directly.
+- **Start with README.md** for high-level understanding of features and commands
+- **Follow the existing patterns** for error handling (use `anyhow::Result<T>`), logging, and CLI design
 - When adding new code:
-  - Follow existing patterns for error handling, logging, and configuration.
-  - Add or update tests alongside code changes when tests exist for similar functionality.
-- Only introduce new dependencies if clearly justified and consistent with the existing ecosystem of the repository.
-- If documentation or configuration in this repository conflicts with these generic instructions, follow the repository’s own documentation.
+  - Add commands to `src/commands/` as separate modules
+  - Use `clap`'s `Parser` derive macro for CLI arguments
+  - Ensure platform-awareness via `src/platform.rs` and `src/buckify/cross.rs`
+  - Update BUCK templates in `assets/` if needed
+- **Only introduce new dependencies** if clearly justified and consistent with the existing ecosystem (prefer established Rust crates like `anyhow`, `clap`, `serde`, `pyo3`)
+- **Test locally** with `cargo run --` before relying on CI
+- Before committing:
+  1. Run `cargo fmt --`
+  2. Run `cargo clippy --all-targets --all-features -- -D warnings`
+  3. Run `prek run --all-files`
+  4. Manually test the affected `cargo buckal` subcommand
+
+## 7. Language & Tone
+
+- Write in **English**.
+- Be concise but specific; prefer actionable guidance over broad commentary.
+- Use GitHub review conventions: when possible, reference **file paths and exact line ranges**. If line numbers are unavailable, reference the function/class and include a small snippet.
+
+## 8. Severity Levels (must label each finding)
+
+- **P0 (Blocker)**: Security vulnerabilities, auth bypass, data loss/corruption, crashes, deadlocks, severe regressions, critical concurrency/transaction issues.
+- **P1 (Must-fix)**: Likely correctness bugs, missing critical edge cases, notable performance regressions, resource leaks, missing essential tests, public contract changes without docs.
+
+> Note: Prioritize **P0/P1**. Minor nits may be grouped under “Optional Improvements” and should not dominate the review.
