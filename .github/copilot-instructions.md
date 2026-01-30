@@ -154,16 +154,3 @@ Pre-commit hooks enforce:
   2. Run `cargo clippy --all-targets --all-features -- -D warnings`
   3. Run `prek run --all-files`
   4. Manually test the affected `cargo buckal` subcommand
-
-## 7. Language & Tone
-
-- Write in **English**.
-- Be concise but specific; prefer actionable guidance over broad commentary.
-- Use GitHub review conventions: when possible, reference **file paths and exact line ranges**. If line numbers are unavailable, reference the function/class and include a small snippet.
-
-## 8. Severity Levels (must label each finding)
-
-- **P0 (Blocker)**: Security vulnerabilities, auth bypass, data loss/corruption, crashes, deadlocks, severe regressions, critical concurrency/transaction issues.
-- **P1 (Must-fix)**: Likely correctness bugs, missing critical edge cases, notable performance regressions, resource leaks, missing essential tests, public contract changes without docs.
-
-> Note: Prioritize **P0/P1**. Minor nits may be grouped under “Optional Improvements” and should not dominate the review.
