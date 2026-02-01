@@ -6,21 +6,23 @@ use cargo_metadata::{MetadataCommand, Node, Package, PackageId, camino::Utf8Path
 use crate::{config::RepoConfig, utils::UnwrapOrExit};
 
 pub struct BuckalContext {
-    pub root: Package,
+    /// The root package of the workspace, if any
+    pub root: Option<Package>,
     pub nodes_map: HashMap<PackageId, Node>,
     pub packages_map: HashMap<PackageId, Package>,
     pub checksums_map: HashMap<String, Checksum>,
     pub workspace_root: Utf8PathBuf,
-    // whether to skip merging manual changes in BUCK files
+    pub workspace_members: Vec<PackageId>,
+    /// Whether to skip merging manual changes in BUCK files
     pub no_merge: bool,
-    // repository configuration
+    /// Repository configuration
     pub repo_config: RepoConfig,
 }
 
 impl BuckalContext {
     pub fn new() -> Self {
         let cargo_metadata = MetadataCommand::new().exec().unwrap();
-        let root = cargo_metadata.root_package().unwrap().to_owned();
+        let root = cargo_metadata.root_package().map(|p| p.to_owned());
         let packages_map = cargo_metadata
             .packages
             .into_iter()
@@ -50,6 +52,7 @@ impl BuckalContext {
             workspace_root: cargo_metadata.workspace_root.clone(),
             no_merge: false,
             repo_config,
+            workspace_members: cargo_metadata.workspace_members,
         }
     }
 }

@@ -48,9 +48,8 @@ pub fn execute(args: &UpdateArgs) {
     let ctx = BuckalContext::new();
     flush_root(&ctx);
 
-    let workspace_root = ctx.root.manifest_path.parent().unwrap().to_path_buf();
-    let new_cache = BuckalCache::new(&ctx.nodes_map, &workspace_root);
-    let changes = new_cache.diff(&last_cache, &workspace_root);
+    let new_cache = BuckalCache::new(&ctx.nodes_map, &ctx.workspace_root);
+    let changes = new_cache.diff(&last_cache, &ctx.workspace_root);
 
     changes.apply(&ctx);
     new_cache.save();

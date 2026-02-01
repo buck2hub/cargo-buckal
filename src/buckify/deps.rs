@@ -215,7 +215,8 @@ pub(super) fn set_deps(
     kind: CargoTargetKind,
     ctx: &BuckalContext,
 ) -> Result<()> {
-    let use_workspace_alias = ctx.repo_config.inherit_workspace_deps && node.id == ctx.root.id;
+    let use_workspace_alias =
+        ctx.repo_config.inherit_workspace_deps && ctx.workspace_members.contains(&node.id);
 
     for dep in &node.deps {
         let Some(dep_package) = packages_map.get(&dep.pkg) else {

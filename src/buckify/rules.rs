@@ -409,7 +409,7 @@ mod tests {
         let ctx = BuckalContext {
             packages_map,
             nodes_map: HashMap::new(),
-            root: pkg.clone(),
+            root: Some(pkg.clone()),
             repo_config: RepoConfig {
                 ignore_tests: false,
                 ..RepoConfig::default()
@@ -417,6 +417,7 @@ mod tests {
             checksums_map: HashMap::new(),
             workspace_root: Utf8PathBuf::from("/tmp"),
             no_merge: false,
+            workspace_members: vec![pkg.id.clone()],
         };
 
         let rules = buckify_root_node(&node, &ctx);
@@ -455,7 +456,7 @@ mod tests {
         let ctx = BuckalContext {
             packages_map,
             nodes_map: HashMap::new(),
-            root: pkg.clone(),
+            root: Some(pkg.clone()),
             repo_config: RepoConfig {
                 ignore_tests: false,
                 ..RepoConfig::default()
@@ -463,6 +464,7 @@ mod tests {
             checksums_map: HashMap::new(),
             workspace_root: Utf8PathBuf::from("/tmp"),
             no_merge: false,
+            workspace_members: vec![pkg.id.clone()],
         };
 
         let rules = buckify_root_node(&node, &ctx);

@@ -31,7 +31,9 @@ impl BuckalChange {
             match change_type {
                 ChangeType::Added | ChangeType::Changed => {
                     // Skip root package
-                    if id == &ctx.root.id {
+                    if let Some(root) = &ctx.root
+                        && id == &root.id
+                    {
                         continue;
                     }
 
@@ -116,34 +118,32 @@ impl BuckalChange {
 }
 
 pub fn flush_root(ctx: &BuckalContext) {
-    buckal_log!(
-        "Flushing",
-        format!("{} v{}", ctx.root.name, ctx.root.version)
-    );
-    let root_node = ctx
-        .nodes_map
-        .get(&ctx.root.id)
-        .expect("Root node not found");
+    // Generate BUCK file for root package
+    // Skip if root package is not found (in virtual workspace)
+    if let Some(root) = &ctx.root {
+        buckal_log!("Flushing", format!("{} v{}", root.name, root.version));
+        let root_node = ctx.nodes_map.get(&root.id).expect("Root node not found");
 
-    if ctx.repo_config.inherit_workspace_deps {
-        buckal_log!(
-            "Generating",
-            "third-party alias rules (inherit_workspace_deps=true)"
-        );
-        generate_third_party_aliases(ctx);
+        if ctx.repo_config.inherit_workspace_deps {
+            buckal_log!(
+                "Generating",
+                "third-party alias rules (inherit_workspace_deps=true)"
+            );
+            generate_third_party_aliases(ctx);
+        }
+
+        let cwd = std::env::current_dir().expect("Failed to get current directory");
+        let buck_path = Utf8PathBuf::from(cwd.to_str().unwrap()).join("BUCK");
+
+        // Generate BUCK rules
+        let buck_rules = buckify_root_node(root_node, ctx);
+
+        // Generate the BUCK file
+        let mut buck_content = gen_buck_content(&buck_rules);
+        buck_content = windows::patch_root_windows_rustc_flags(buck_content, ctx, root);
+        buck_content = cross::patch_rust_test_target_compatible_with(buck_content);
+        std::fs::write(&buck_path, buck_content).expect("Failed to write BUCK file");
     }
-
-    let cwd = std::env::current_dir().expect("Failed to get current directory");
-    let buck_path = Utf8PathBuf::from(cwd.to_str().unwrap()).join("BUCK");
-
-    // Generate BUCK rules
-    let buck_rules = buckify_root_node(root_node, ctx);
-
-    // Generate the BUCK file
-    let mut buck_content = gen_buck_content(&buck_rules);
-    buck_content = windows::patch_root_windows_rustc_flags(buck_content, ctx);
-    buck_content = cross::patch_rust_test_target_compatible_with(buck_content);
-    std::fs::write(&buck_path, buck_content).expect("Failed to write BUCK file");
 }
 
 fn generate_third_party_aliases(ctx: &BuckalContext) {

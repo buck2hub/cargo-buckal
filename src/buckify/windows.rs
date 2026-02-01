@@ -1,5 +1,6 @@
 use std::{collections::BTreeSet as Set, vec};
 
+use cargo_metadata::Package;
 use starlark_syntax::codemap::{Pos, Span, Spanned};
 use starlark_syntax::syntax::ast::{
     ArgumentP, AstExpr, AstLiteral, AstNoPayload, AstStmt, CallArgsP, ExprP, IdentP, Stmt,
@@ -18,25 +19,23 @@ struct WindowsImportLibFlags {
 pub(super) fn patch_root_windows_rustc_flags(
     mut buck_content: String,
     ctx: &BuckalContext,
+    root: &Package,
 ) -> String {
-    let bin_names: Vec<String> = ctx
-        .root
+    let bin_names: Vec<String> = root
         .targets
         .iter()
         .filter(|t| t.kind.contains(&cargo_metadata::TargetKind::Bin))
         .map(|t| t.name.clone())
         .collect();
 
-    let mut rust_test_names: Set<String> = ctx
-        .root
+    let mut rust_test_names: Set<String> = root
         .targets
         .iter()
         .filter(|t| t.kind.contains(&cargo_metadata::TargetKind::Test))
         .map(|t| t.name.clone())
         .collect();
 
-    let lib_targets: Vec<_> = ctx
-        .root
+    let lib_targets: Vec<_> = root
         .targets
         .iter()
         .filter(|t| {
