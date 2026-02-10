@@ -3,6 +3,8 @@ pub mod autoremove;
 pub mod build;
 pub mod clean;
 pub mod init;
+pub mod login;
+pub mod logout;
 pub mod migrate;
 pub mod new;
 pub mod remove;

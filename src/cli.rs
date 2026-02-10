@@ -44,6 +44,12 @@ pub enum BuckalSubCommands {
     /// Create a new package in an existing directory
     Init(crate::commands::init::InitArgs),
 
+    /// Log in to a registry
+    Login(crate::commands::login::LoginArgs),
+
+    /// Remove a token from the registry locally
+    Logout(crate::commands::logout::LogoutArgs),
+
     /// Migrate existing Cargo packages to Buck2
     Migrate(crate::commands::migrate::MigrateArgs),
 
@@ -75,6 +81,8 @@ impl Cli {
                         BuckalSubCommands::Build(args) => commands::build::execute(args),
                         BuckalSubCommands::Clean(args) => commands::clean::execute(args),
                         BuckalSubCommands::Init(args) => commands::init::execute(args),
+                        BuckalSubCommands::Login(args) => commands::login::execute(args),
+                        BuckalSubCommands::Logout(args) => commands::logout::execute(args),
                         BuckalSubCommands::Migrate(args) => commands::migrate::execute(args),
                         BuckalSubCommands::New(args) => commands::new::execute(args),
                         BuckalSubCommands::Remove(args) => commands::remove::execute(args),

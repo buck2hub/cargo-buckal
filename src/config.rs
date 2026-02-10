@@ -1,6 +1,7 @@
-use std::collections::BTreeSet as Set;
+use std::collections::{BTreeMap as Map, BTreeSet as Set};
 use std::{fs, path::PathBuf};
 
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -10,20 +11,62 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default = "default_buck2_binary")]
+    #[serde(
+        default = "default_buck2_binary",
+        skip_serializing_if = "is_default_buck2_binary"
+    )]
     pub buck2_binary: String,
+    #[serde(default, skip_serializing_if = "RegistryDefault::if_skip")]
+    pub registry: RegistryDefault,
+    #[serde(default = "default_registries", skip_serializing_if = "Map::is_empty")]
+    pub registries: Map<String, RegistryEntry>,
+}
+
+fn is_default_buck2_binary(value: &str) -> bool {
+    value == "buck2"
 }
 
 fn default_buck2_binary() -> String {
     "buck2".to_string()
 }
 
+fn default_registries() -> Map<String, RegistryEntry> {
+    let mut registries = Map::new();
+    registries.insert(
+        "buck2hub".to_string(),
+        RegistryEntry {
+            base: "https://hub.buck2hub.com".to_string(),
+            token: None,
+        },
+    );
+    registries
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             buck2_binary: default_buck2_binary(),
+            registry: RegistryDefault::default(),
+            registries: default_registries(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RegistryDefault {
+    pub default: Option<String>,
+}
+
+impl RegistryDefault {
+    pub fn if_skip(&self) -> bool {
+        self.default.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RegistryEntry {
+    pub base: String,
+    pub token: Option<String>,
 }
 
 impl Config {
@@ -54,6 +97,17 @@ impl Config {
                 Self::default()
             }
         }
+    }
+
+    /// Save configuration to ~/.config/buckal/config.toml
+    pub fn save(&self) -> Result<()> {
+        let config_path = Self::config_path();
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = toml::to_string_pretty(self).unwrap();
+        fs::write(config_path, content)?;
+        Ok(())
     }
 
     /// Get the configuration file path
