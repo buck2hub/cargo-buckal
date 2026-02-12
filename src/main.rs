@@ -9,6 +9,7 @@ mod commands;
 mod config;
 mod context;
 mod platform;
+mod registry;
 mod utils;
 
 use std::sync::OnceLock;

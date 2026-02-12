@@ -36,6 +36,7 @@ fn default_registries() -> Map<String, RegistryEntry> {
         "buck2hub".to_string(),
         RegistryEntry {
             base: "https://hub.buck2hub.com".to_string(),
+            api: "https://git.buck2hub.com".to_string(),
             token: None,
         },
     );
@@ -66,6 +67,7 @@ impl RegistryDefault {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RegistryEntry {
     pub base: String,
+    pub api: String,
     pub token: Option<String>,
 }
 
@@ -117,6 +119,14 @@ impl Config {
             .join(".config")
             .join("buckal")
             .join("config.toml")
+    }
+
+    /// Get the default registry name, or "buck2hub" if not set
+    pub fn default_registry(&self) -> &str {
+        self.registry
+            .default
+            .as_deref()
+            .unwrap_or("buck2hub")
     }
 }
 

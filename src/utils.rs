@@ -21,6 +21,8 @@ macro_rules! buckal_log {
             "Fetching" => ::colored::Colorize::cyan($action),
             "Login" => ::colored::Colorize::green($action),
             "Logout" => ::colored::Colorize::green($action),
+            "Push" => ::colored::Colorize::cyan($action),
+            "Uploading" => ::colored::Colorize::green($action),
             _ => ::colored::Colorize::blue($action),
         };
         println!("{:>12} {}", ::colored::Colorize::bold(colored), $msg);

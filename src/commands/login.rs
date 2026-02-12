@@ -23,10 +23,12 @@ pub fn execute(args: &LoginArgs) {
 
     let registry_name = args
         .registry
-        .as_deref()
-        .unwrap_or(config.registry.default.as_deref().unwrap_or("buck2hub"));
+        .as_ref()
+        .map(|s| s.as_str())
+        .unwrap_or_else(|| config.default_registry())
+        .to_string();
 
-    if let Some(registry) = config.registries.get_mut(registry_name) {
+    if let Some(registry) = config.registries.get_mut(&registry_name) {
         let token = Text::new(
             format!(
                 "Please paste the token found on {}/me/settings below\n ",
@@ -42,7 +44,7 @@ pub fn execute(args: &LoginArgs) {
         config.save().unwrap_or_exit();
         buckal_log!("Login", format!("token for `{}` saved", registry_name));
     } else {
-        buckal_error!("Registry `{}` not found in configuration", registry_name);
+        buckal_error!("registry `{}` not found in configuration", registry_name);
         std::process::exit(1);
     }
 }
