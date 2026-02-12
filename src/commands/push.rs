@@ -37,10 +37,7 @@ pub fn execute(args: &PushArgs) {
         .to_string();
 
     if let Some(registry) = config.registries.get_mut(&registry_name) {
-        if registry.token.is_none() {
-            buckal_error!("no token found, please run `cargo buckal login` first");
-            std::process::exit(1);
-        } else {
+        if let Some(token) = &registry.token {
             let client = Client::new();
             // Step 1: Create a new upload session
             let start_request = SessionStartRequest {
@@ -49,10 +46,7 @@ pub fn execute(args: &PushArgs) {
             let response: SessionStartResponse = client
                 .post(format!("{}/api/v1/buck/session/start", registry.api))
                 .body(json!(start_request).to_string())
-                .header(
-                    AUTHORIZATION,
-                    format!("Bearer {}", registry.token.as_ref().unwrap()),
-                )
+                .header(AUTHORIZATION, format!("Bearer {}", token))
                 .header(CONTENT_TYPE, "application/json")
                 .send()
                 .and_then(|r| r.error_for_status())
@@ -98,10 +92,7 @@ pub fn execute(args: &PushArgs) {
                     registry.api, cl_link
                 ))
                 .body(json!(manifest).to_string())
-                .header(
-                    AUTHORIZATION,
-                    format!("Bearer {}", registry.token.as_ref().unwrap()),
-                )
+                .header(AUTHORIZATION, format!("Bearer {}", token))
                 .header(CONTENT_TYPE, "application/json")
                 .send()
                 .and_then(|r| r.error_for_status())
@@ -128,10 +119,7 @@ pub fn execute(args: &PushArgs) {
                             registry.api, &cl_link
                         ))
                         .body(file_content)
-                        .header(
-                            AUTHORIZATION,
-                            format!("Bearer {}", registry.token.as_ref().unwrap()),
-                        )
+                        .header(AUTHORIZATION, format!("Bearer {}", token))
                         .header(CONTENT_TYPE, "application/octet-stream")
                         .header("X-File-Path", &file.path)
                         .header("X-File-Size", file_size.to_string())
@@ -152,15 +140,15 @@ pub fn execute(args: &PushArgs) {
                     })
                     .to_string(),
                 )
-                .header(
-                    AUTHORIZATION,
-                    format!("Bearer {}", registry.token.as_ref().unwrap()),
-                )
+                .header(AUTHORIZATION, format!("Bearer {}", token))
                 .header(CONTENT_TYPE, "application/json")
                 .send()
                 .and_then(|r| r.error_for_status())
                 .unwrap_or_exit_ctx("failed to complete session");
             buckal_log!("Push", "session completed successfully");
+        } else {
+            buckal_error!("no token found, please run `cargo buckal login` first");
+            std::process::exit(1);
         }
     } else {
         buckal_error!("registry `{}` not found in configuration", registry_name);

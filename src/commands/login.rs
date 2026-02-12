@@ -23,8 +23,7 @@ pub fn execute(args: &LoginArgs) {
 
     let registry_name = args
         .registry
-        .as_ref()
-        .map(|s| s.as_str())
+        .as_deref()
         .unwrap_or_else(|| config.default_registry())
         .to_string();
 
