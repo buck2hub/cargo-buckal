@@ -123,10 +123,7 @@ impl Config {
 
     /// Get the default registry name, or "buck2hub" if not set
     pub fn default_registry(&self) -> &str {
-        self.registry
-            .default
-            .as_deref()
-            .unwrap_or("buck2hub")
+        self.registry.default.as_deref().unwrap_or("buck2hub")
     }
 }
 
