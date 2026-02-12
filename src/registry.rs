@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStartRequest {
     /// Path to current project or workspace
-    /// Just make the server happy
+    /// Should be set to "/", otherwise the server will return "Internal Server Error"
     pub path: String,
 }
 
@@ -42,53 +42,53 @@ pub struct SessionCompleteRequest {
     pub commit_message: Option<String>,
 }
 
-// /// Completion data containing upload results
-// #[derive(Debug, Clone, Serialize, Deserialize)]
-// pub struct SessionCompleteData {
-//     /// Content Link ID
-//     pub cl_id: i64,
-//     /// Content Link URL
-//     pub cl_link: String,
-//     /// Commit ID
-//     pub commit_id: String,
-//     /// Creation timestamp
-//     pub created_at: String,
-//     /// Number of files uploaded
-//     pub files_count: i64,
-// }
+/// Completion data containing upload results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionCompleteData {
+    /// Content Link ID
+    pub cl_id: i64,
+    /// Content Link URL
+    pub cl_link: String,
+    /// Commit ID
+    pub commit_id: String,
+    /// Creation timestamp
+    pub created_at: String,
+    /// Number of files uploaded
+    pub files_count: i64,
+}
 
-// /// Response from session complete request
-// #[derive(Debug, Clone, Serialize, Deserialize)]
-// pub struct SessionCompleteResponse {
-//     /// Completion data containing upload results
-//     pub data: SessionCompleteData,
-//     /// Error message if any
-//     pub err_message: String,
-//     /// Request result status
-//     pub req_result: bool,
-// }
+/// Response from session complete request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionCompleteResponse {
+    /// Completion data containing upload results
+    pub data: SessionCompleteData,
+    /// Error message if any
+    pub err_message: String,
+    /// Request result status
+    pub req_result: bool,
+}
 
-// /// File upload data containing verification status
-// #[derive(Debug, Clone, Serialize, Deserialize)]
-// pub struct SessionFileData {
-//     /// File path
-//     pub file_path: String,
-//     /// Uploaded size in bytes
-//     pub uploaded_size: i64,
-//     /// Whether the file upload was verified
-//     pub verified: bool,
-// }
+/// File upload data containing verification status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionFileData {
+    /// File path
+    pub file_path: String,
+    /// Uploaded size in bytes
+    pub uploaded_size: i64,
+    /// Whether the file upload was verified
+    pub verified: bool,
+}
 
-// /// Response from file upload request
-// #[derive(Debug, Clone, Serialize, Deserialize)]
-// pub struct SessionFileResponse {
-//     /// File upload data
-//     pub data: SessionFileData,
-//     /// Error message if any
-//     pub err_message: String,
-//     /// Request result status
-//     pub req_result: bool,
-// }
+/// Response from file upload request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionFileResponse {
+    /// File upload data
+    pub data: SessionFileData,
+    /// Error message if any
+    pub err_message: String,
+    /// Request result status
+    pub req_result: bool,
+}
 
 /// Manifest file entry for session request
 #[derive(Debug, Clone, Serialize, Deserialize)]

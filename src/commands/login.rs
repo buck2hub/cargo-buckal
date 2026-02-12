@@ -14,7 +14,7 @@ pub fn execute(args: &LoginArgs) {
     let mut config = Config::load();
 
     let validator = |input: &str| {
-        if input.chars().count() > 0 {
+        if !input.is_empty() {
             Ok(Validation::Valid)
         } else {
             Ok(Validation::Invalid("Token cannot be empty.".into()))

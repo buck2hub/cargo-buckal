@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap as Map, BTreeSet as Set};
-use std::{fs, path::PathBuf};
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -107,8 +109,21 @@ impl Config {
         if let Some(parent) = config_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let content = toml::to_string_pretty(self).unwrap();
-        fs::write(config_path, content)?;
+        let content = toml::to_string_pretty(self)?;
+
+        // Write with owner-only permissions (0600 on Unix)
+        // Following Cargo's approach: Unix gets 0600, other platforms use default permissions
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&config_path)?;
+
+        file.write_all(content.as_bytes())?;
+
+        // Set permissions after writing (Unix only)
+        set_permissions(&file)?;
+
         Ok(())
     }
 
@@ -125,6 +140,24 @@ impl Config {
     pub fn default_registry(&self) -> &str {
         self.registry.default.as_deref().unwrap_or("buck2hub")
     }
+}
+
+/// Set file permissions to owner-only (Unix only, following Cargo's approach)
+#[cfg(unix)]
+fn set_permissions(file: &File) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut perms = file.metadata()?.permissions();
+    perms.set_mode(0o600);
+    file.set_permissions(perms)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_permissions(_file: &File) -> Result<()> {
+    // On non-Unix platforms, rely on default file system permissions
+    // This is the same approach used by Cargo
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
