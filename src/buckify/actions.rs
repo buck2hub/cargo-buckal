@@ -5,8 +5,6 @@ use std::{
 
 use regex::Regex;
 
-use cargo_metadata::camino::Utf8PathBuf;
-
 use crate::{
     RUST_CRATES_ROOT,
     buck::{Alias, parse_buck_file, patch_buck_rules},
@@ -132,8 +130,8 @@ pub fn flush_root(ctx: &BuckalContext) {
             generate_third_party_aliases(ctx);
         }
 
-        let cwd = std::env::current_dir().expect("Failed to get current directory");
-        let buck_path = Utf8PathBuf::from(cwd.to_str().unwrap()).join("BUCK");
+        let manifest_dir = root.manifest_path.parent().unwrap().to_owned();
+        let buck_path = manifest_dir.join("BUCK");
 
         // Generate BUCK rules
         let buck_rules = buckify_root_node(root_node, ctx);

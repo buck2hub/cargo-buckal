@@ -20,8 +20,15 @@ pub struct BuckalContext {
 }
 
 impl BuckalContext {
-    pub fn new() -> Self {
-        let cargo_metadata = MetadataCommand::new().exec().unwrap();
+    pub fn new(manifest_path: Option<String>) -> Self {
+        let cargo_metadata = if let Some(manifest) = manifest_path {
+            MetadataCommand::new()
+                .manifest_path(manifest)
+                .exec()
+                .unwrap()
+        } else {
+            MetadataCommand::new().exec().unwrap()
+        };
         let root = cargo_metadata.root_package().map(|p| p.to_owned());
         let packages_map = cargo_metadata
             .packages

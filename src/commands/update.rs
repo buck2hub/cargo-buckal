@@ -3,7 +3,6 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, anyhow};
 use cargo_metadata::MetadataCommand;
 use clap::Parser;
-use log::debug;
 
 use crate::{
     buckify::flush_root,
@@ -25,6 +24,10 @@ pub struct UpdateArgs {
     /// Don't actually write the lockfile
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Path to Cargo.toml
+    #[arg(long)]
+    pub manifest_path: Option<String>,
 }
 
 pub fn execute(args: &UpdateArgs) {
@@ -42,10 +45,14 @@ pub fn execute(args: &UpdateArgs) {
 
     section("Buckal Console");
 
-    debug!("Syncing: Refreshing Cargo metadata...");
-    let _ = MetadataCommand::new().exec();
+    // Refresh Cargo metadata
+    if let Some(manifest) = &args.manifest_path {
+        let _ = MetadataCommand::new().manifest_path(manifest).exec();
+    } else {
+        let _ = MetadataCommand::new().exec();
+    }
 
-    let ctx = BuckalContext::new();
+    let ctx = BuckalContext::new(args.manifest_path.clone());
     flush_root(&ctx);
 
     let new_cache = BuckalCache::new(&ctx.nodes_map, &ctx.workspace_root);
@@ -65,6 +72,10 @@ fn handle_cargo_update(args: &UpdateArgs) -> Result<()> {
 
     if args.dry_run {
         cargo_cmd.arg("--dry-run");
+    }
+
+    if let Some(manifest) = &args.manifest_path {
+        cargo_cmd.arg("--manifest-path").arg(manifest);
     }
 
     cargo_cmd.args(&args.packages);

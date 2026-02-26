@@ -33,6 +33,10 @@ pub struct RemoveArgs {
     /// Remove from build-dependencies
     #[arg(long, default_value = "false")]
     pub build: bool,
+
+    /// Path to Cargo.toml
+    #[arg(long, conflicts_with = "workspace")]
+    pub manifest_path: Option<String>,
 }
 
 pub fn execute(args: &RemoveArgs) {
@@ -50,10 +54,14 @@ pub fn execute(args: &RemoveArgs) {
         section("Buckal Console");
     }
 
-    debug!("Syncing: Refreshing Cargo metadata...");
-    let _ = MetadataCommand::new().exec();
+    // Refresh Cargo metadata
+    if let Some(manifest) = &args.manifest_path {
+        let _ = MetadataCommand::new().manifest_path(manifest).exec();
+    } else {
+        let _ = MetadataCommand::new().exec();
+    }
 
-    let ctx = BuckalContext::new();
+    let ctx = BuckalContext::new(args.manifest_path.clone());
     flush_root(&ctx);
 
     let new_cache = BuckalCache::new(&ctx.nodes_map, &ctx.workspace_root);
@@ -76,6 +84,9 @@ fn handle_classic_remove(args: &RemoveArgs) -> Result<()> {
     }
     if args.build {
         cargo_cmd.arg("--build");
+    }
+    if let Some(manifest) = &args.manifest_path {
+        cargo_cmd.arg("--manifest-path").arg(manifest);
     }
 
     let status = cargo_cmd

@@ -19,15 +19,22 @@ pub struct MigrateArgs {
     /// Do not use cached data from previous runs
     #[clap(long, name = "no-cache")]
     pub no_cache: bool,
+
     /// Merge manual edits with generated content
     #[clap(long)]
     pub merge: bool,
+
     /// Initialize Buck2 in the specified directory (defaults to current directory)
     #[clap(long, value_name = "PATH", default_missing_value = ".", num_args = 0..=1, conflicts_with = "fetch")]
     pub init: Option<PathBuf>,
+
     /// Fetch latest bundles from remote repository
     #[clap(long)]
     pub fetch: bool,
+
+    /// Path to Cargo.toml
+    #[arg(long, conflicts_with = "init")]
+    pub manifest_path: Option<String>,
 }
 
 pub fn execute(args: &MigrateArgs) {
@@ -106,7 +113,7 @@ pub fn execute(args: &MigrateArgs) {
     }
 
     // get cargo metadata and generate context
-    let mut ctx = BuckalContext::new();
+    let mut ctx = BuckalContext::new(args.manifest_path.clone());
     ctx.no_merge = !args.merge;
 
     // Process the root node
