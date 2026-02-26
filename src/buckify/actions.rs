@@ -130,7 +130,11 @@ pub fn flush_root(ctx: &BuckalContext) {
             generate_third_party_aliases(ctx);
         }
 
-        let manifest_dir = root.manifest_path.parent().unwrap().to_owned();
+        let manifest_dir = root
+            .manifest_path
+            .parent()
+            .expect("Failed to get manifest directory")
+            .to_owned();
         let buck_path = manifest_dir.join("BUCK");
 
         // Generate BUCK rules

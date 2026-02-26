@@ -257,8 +257,8 @@ pub fn buckify_root_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
     buck_rules
 }
 
+/// Vendors the package sources to `third-party/rust/crates/<package_name>/<version>` and returns the path.
 pub fn vendor_package(package: &Package) -> Utf8PathBuf {
-    // Vendor the package sources to `third-party/rust/crates/<package_name>/<version>`
     let vendor_dir = get_vendor_dir(&package.name, &package.version.to_string())
         .unwrap_or_exit_ctx("failed to get vendor directory");
     if !vendor_dir.exists() {
