@@ -37,7 +37,7 @@ fn default_registries() -> Map<String, RegistryEntry> {
     registries.insert(
         "buck2hub".to_string(),
         RegistryEntry {
-            base: "https://hub.buck2hub.com".to_string(),
+            base: "https://app.buck2hub.com".to_string(),
             api: "https://git.buck2hub.com".to_string(),
             token: None,
         },
