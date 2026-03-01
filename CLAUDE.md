@@ -16,8 +16,8 @@ cargo build                                                  # Debug build
 cargo build --release                                        # Release build
 cargo test                                                   # Run unit tests
 cargo clippy --all-targets --all-features -- -D warnings     # Lint (must pass with zero warnings)
-cargo fmt --check                                            # Check formatting
-cargo fmt --                                                 # Auto-format
+cargo +nightly fmt --check                                   # Check formatting
+cargo +nightly fmt --                                        # Auto-format
 ```
 
 ### Pre-commit Hooks
@@ -29,13 +29,13 @@ prek install              # Set up git hooks (one-time)
 prek run --all-files      # Run all checks
 ```
 
-Hooks enforce: `cargo fmt`, `cargo clippy -D warnings`, typos, TOML/YAML validation, trailing whitespace, buildifier (BUCK files), actionlint + zizmor (GitHub Actions).
+Hooks enforce: `cargo +nightly fmt`, `cargo clippy -D warnings`, typos, TOML/YAML validation, trailing whitespace, buildifier (BUCK files), actionlint + zizmor (GitHub Actions).
 
 ### Validation Checklist (before committing)
 
 1. `cargo build` succeeds
 2. `cargo clippy --all-targets --all-features -- -D warnings` — zero warnings
-3. `cargo fmt --check` passes
+3. `cargo +nightly fmt --check` passes
 4. `prek run --all-files` passes
 
 ## Project Structure
@@ -131,7 +131,7 @@ Commands are registered in `src/cli.rs` via the `BuckalSubCommands` enum and dis
 Key workflows in `.github/workflows/`:
 
 - **`build-and-test.yml`** — `cargo build` on every PR
-- **`lint.yml`** — runs `prek` (cargo fmt + clippy + typos + buildifier + actionlint + zizmor)
+- **`lint.yml`** — runs `prek` (cargo +nightly fmt + clippy + typos + buildifier + actionlint + zizmor)
 - **`integration-test-*.yml`** — tests against real projects (fd, libra, git-internal, monorepo-demo)
 - **`test-init-new-commands.yml`** — tests init/new command workflows
 
