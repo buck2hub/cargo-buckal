@@ -16,12 +16,6 @@ runs:
         toolchain: stable
         targets: ${{ inputs.targets }}
 
-    - name: Setup Rust toolchain (nightly with rustfmt)
-      uses: dtolnay/rust-toolchain@master
-      with:
-        toolchain: nightly
-        components: rustfmt
-
     - name: Setup Python 3.11 (Windows)
       if: runner.os == 'Windows'
       uses: actions/setup-python@v5

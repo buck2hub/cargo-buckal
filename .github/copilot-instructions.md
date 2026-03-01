@@ -56,8 +56,8 @@ The tool can be installed locally with `cargo install --path .` for testing inst
 ```bash
 cargo build              # Verify compilation
 cargo clippy --all-targets --all-features -- -D warnings  # Linter (strict mode)
-cargo +nightly fmt --check       # Check formatting
-cargo +nightly fmt --            # Auto-format code
+cargo fmt --check       # Check formatting
+cargo fmt --            # Auto-format code
 ```
 
 **Pre-commit hooks:**
@@ -68,7 +68,7 @@ prek run --all-files    # Run all checks on entire codebase
 ```
 
 Pre-commit hooks enforce:
-- `cargo +nightly fmt` (Rust formatting)
+- `cargo fmt` (Rust formatting)
 - `cargo clippy --all-targets --all-features -- -D warnings` (strict linting)
 - Typos detection, TOML/YAML validation, trailing whitespace
 - Buildifier for BUCK file formatting
@@ -76,7 +76,7 @@ Pre-commit hooks enforce:
 **Before submitting changes:**
 1. Ensure `cargo build` succeeds
 2. Run `cargo clippy --all-targets --all-features -- -D warnings` (must have zero warnings)
-3. Run `cargo +nightly fmt --check` (or `cargo +nightly fmt --` to auto-fix)
+3. Run `cargo fmt --check` (or `cargo fmt --` to auto-fix)
 4. Run `prek run --all-files` to check all pre-commit rules
 5. Test the CLI with `cargo run -- <command> --help`
 
@@ -103,7 +103,7 @@ Pre-commit hooks enforce:
 - `utils.rs`: Utility functions
 
 **Configuration files:**
-- `.pre-commit-config.yaml`: Pre-commit hooks (cargo +nightly fmt, cargo clippy, typos, buildifier)
+- `.pre-commit-config.yaml`: Pre-commit hooks (cargo fmt, cargo clippy, typos, buildifier)
 - `Cargo.toml`: Rust dependencies and project metadata (edition 2024)
 
 **When making changes:**
@@ -128,7 +128,7 @@ Pre-commit hooks enforce:
 
 **Key points for CI:**
 1. The build workflow checks `cargo build` succeeds on Ubuntu
-2. The lint workflow runs `prek` which enforces `cargo +nightly fmt` and `cargo clippy`
+2. The lint workflow runs `prek` which enforces `cargo fmt` and `cargo clippy`
 3. Integration tests validate the tool against real-world projects
 4. Placeholders exist for future test enhancements
 
@@ -150,7 +150,7 @@ Pre-commit hooks enforce:
 - **Only introduce new dependencies** if clearly justified and consistent with the existing ecosystem (prefer established Rust crates like `anyhow`, `clap`, `serde`, `pyo3`)
 - **Test locally** with `cargo run --` before relying on CI
 - Before committing:
-  1. Run `cargo +nightly fmt --`
+  1. Run `cargo fmt --`
   2. Run `cargo clippy --all-targets --all-features -- -D warnings`
   3. Run `prek run --all-files`
   4. Manually test the affected `cargo buckal` subcommand
