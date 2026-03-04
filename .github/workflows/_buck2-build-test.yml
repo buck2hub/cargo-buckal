@@ -90,7 +90,7 @@ jobs:
       # Download generated tree
       # ============================================================
       - name: Download ${{ inputs.project_name }}-gen-linux
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.project_name }}-gen-linux
           path: ${{ inputs.project_dir || inputs.project_name }}
