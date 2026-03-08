@@ -480,20 +480,6 @@ pub fn get_vendor_dir(package_id: &PackageId, ctx: &BuckalContext) -> Result<Utf
     Ok(get_buck2_root()?.join(get_vendor_path_relative(package_id, ctx)?))
 }
 
-/// Create the `third-party` directory in the Buck2 project if it doesn't exist
-pub fn create_third_party_dirs() -> Result<()> {
-    let buck2_root = get_buck2_root()?;
-    let crates_dir = buck2_root.join(RUST_CRATES_ROOT);
-    if !crates_dir.exists() {
-        std::fs::create_dir_all(&crates_dir)?;
-    }
-    let git_dir = buck2_root.join(RUST_GIT_ROOT);
-    if !git_dir.exists() {
-        std::fs::create_dir_all(&git_dir)?;
-    }
-    Ok(())
-}
-
 /// Retrieve the last saved BuckalCache from the cache file, or create a new one if the cache file does not exist.
 pub fn get_last_cache() -> BuckalCache {
     if let Ok(last_cache) = BuckalCache::load() {
