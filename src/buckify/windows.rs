@@ -99,7 +99,7 @@ fn windows_import_lib_flags(ctx: &BuckalContext) -> WindowsImportLibFlags {
         for package in matches {
             out.push(format!(
                 "@$(location //{}:build-script-run[rustc_flags])",
-                get_vendor_path_relative(&package.id, ctx).unwrap_or_exit()
+                get_vendor_path_relative(&package.id).unwrap_or_exit()
             ));
         }
     };

@@ -1,9 +1,6 @@
-use std::{
-    borrow::Cow,
-    collections::{BTreeSet as Set, HashMap},
-};
+use std::{borrow::Cow, collections::BTreeSet as Set};
 
-use cargo_metadata::{Node, Package, PackageId, Target, camino::Utf8PathBuf};
+use cargo_metadata::{Node, Package, Target, camino::Utf8PathBuf};
 use cargo_util_schemas::lockfile::TomlLockfileSourceId;
 
 use crate::{
@@ -22,7 +19,6 @@ use super::deps::{dep_kind_matches, set_deps};
 pub(super) fn emit_rust_library(
     package: &Package,
     node: &Node,
-    packages_map: &HashMap<PackageId, Package>,
     lib_target: &Target,
     manifest_dir: &Utf8PathBuf,
     buckal_name: &str,
@@ -66,14 +62,8 @@ pub(super) fn emit_rust_library(
     }
 
     // Set dependencies
-    set_deps(
-        &mut rust_library,
-        node,
-        packages_map,
-        CargoTargetKind::Lib,
-        ctx,
-    )
-    .unwrap_or_exit_ctx(format!("failed to set dependencies for '{}'", buckal_name));
+    set_deps(&mut rust_library, node, CargoTargetKind::Lib, ctx)
+        .unwrap_or_exit_ctx(format!("failed to set dependencies for '{}'", buckal_name));
 
     rust_library
 }
@@ -82,7 +72,6 @@ pub(super) fn emit_rust_library(
 pub(super) fn emit_rust_binary(
     package: &Package,
     node: &Node,
-    packages_map: &HashMap<PackageId, Package>,
     bin_target: &Target,
     manifest_dir: &Utf8PathBuf,
     buckal_name: &str,
@@ -114,14 +103,8 @@ pub(super) fn emit_rust_binary(
     );
 
     // Set dependencies
-    set_deps(
-        &mut rust_binary,
-        node,
-        packages_map,
-        CargoTargetKind::Bin,
-        ctx,
-    )
-    .unwrap_or_exit_ctx(format!("failed to set dependencies for '{}'", buckal_name));
+    set_deps(&mut rust_binary, node, CargoTargetKind::Bin, ctx)
+        .unwrap_or_exit_ctx(format!("failed to set dependencies for '{}'", buckal_name));
 
     if let Some(platforms) = lookup_platforms(&package.name) {
         rust_binary.compatible_with = buck_labels(&platforms);
@@ -134,7 +117,6 @@ pub(super) fn emit_rust_binary(
 pub(super) fn emit_rust_test(
     package: &Package,
     node: &Node,
-    packages_map: &HashMap<PackageId, Package>,
     test_target: &Target,
     manifest_dir: &Utf8PathBuf,
     buckal_name: &str,
@@ -166,14 +148,8 @@ pub(super) fn emit_rust_test(
     );
 
     // Set dependencies
-    set_deps(
-        &mut rust_test,
-        node,
-        packages_map,
-        CargoTargetKind::Test,
-        ctx,
-    )
-    .unwrap_or_exit_ctx(format!("failed to set dependencies for '{}'", buckal_name));
+    set_deps(&mut rust_test, node, CargoTargetKind::Test, ctx)
+        .unwrap_or_exit_ctx(format!("failed to set dependencies for '{}'", buckal_name));
 
     if let Some(platforms) = lookup_platforms(&package.name) {
         rust_test.compatible_with = buck_labels(&platforms);
@@ -187,7 +163,6 @@ pub(super) fn emit_buildscript_build(
     build_target: &Target,
     package: &Package,
     node: &Node,
-    packages_map: &HashMap<PackageId, Package>,
     manifest_dir: &Utf8PathBuf,
     ctx: &BuckalContext,
 ) -> RustBinary {
@@ -220,7 +195,6 @@ pub(super) fn emit_buildscript_build(
     set_deps(
         &mut buildscript_build,
         node,
-        packages_map,
         CargoTargetKind::CustomBuild,
         ctx,
     )
@@ -279,7 +253,7 @@ pub(super) fn emit_buildscript_run(
                 let build_name_dep = get_build_name(&build_target_dep.name);
                 buildscript_run.env_srcs.insert(format!(
                     "//{}:{build_name_dep}-run[metadata]",
-                    get_vendor_path_relative(&dep_package.id, ctx).unwrap_or_exit()
+                    get_vendor_path_relative(&dep_package.id).unwrap_or_exit()
                 ));
             } else {
                 panic!(

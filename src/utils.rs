@@ -9,13 +9,12 @@ use anyhow::{Result, bail};
 use cargo_metadata::camino::Utf8PathBuf;
 use cargo_metadata::{MetadataCommand, PackageId};
 use cargo_platform::Cfg;
-use cargo_util_schemas::core::SourceKind;
+use cargo_util_schemas::core::{PackageIdSpec, SourceKind};
 use colored::Colorize;
 use inquire::Select;
 
 use crate::buck2::Buck2Command;
 use crate::cache::BuckalCache;
-use crate::context::BuckalContext;
 use crate::{RUST_CRATES_ROOT, RUST_GIT_ROOT};
 
 #[macro_export]
@@ -445,11 +444,8 @@ pub fn get_cache_path() -> Result<Utf8PathBuf> {
 /// This function determines the vendor path based on the package source:
 /// - For registry packages, it returns `third-party/rust/crates/<package>/<version>`
 /// - For git packages, it returns `third-party/rust/git/<package>/<version>`
-pub fn get_vendor_path_relative(package_id: &PackageId, ctx: &BuckalContext) -> Result<String> {
-    let package_id_spec = ctx
-        .package_id_spec_map
-        .get(package_id)
-        .expect("Package ID spec not found");
+pub fn get_vendor_path_relative(package_id: &PackageId) -> Result<String> {
+    let package_id_spec = PackageIdSpec::parse(&package_id.repr)?;
     match package_id_spec
         .kind()
         .expect("failed to extract package source kind")
@@ -476,8 +472,8 @@ pub fn get_vendor_path_relative(package_id: &PackageId, ctx: &BuckalContext) -> 
 }
 
 /// Get the vendor directory for a given package
-pub fn get_vendor_dir(package_id: &PackageId, ctx: &BuckalContext) -> Result<Utf8PathBuf> {
-    Ok(get_buck2_root()?.join(get_vendor_path_relative(package_id, ctx)?))
+pub fn get_vendor_dir(package_id: &PackageId) -> Result<Utf8PathBuf> {
+    Ok(get_buck2_root()?.join(get_vendor_path_relative(package_id)?))
 }
 
 /// Retrieve the last saved BuckalCache from the cache file, or create a new one if the cache file does not exist.

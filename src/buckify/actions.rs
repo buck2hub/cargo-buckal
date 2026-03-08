@@ -1,4 +1,5 @@
 use cargo_metadata::Package;
+use cargo_util_schemas::core::PackageIdSpec;
 use regex::Regex;
 
 use crate::{
@@ -43,14 +44,14 @@ impl BuckalChange {
                         );
 
                         // Vendor package sources
-                        let vendor_dir = if !is_third_party(package, ctx) {
+                        let vendor_dir = if !is_third_party(package) {
                             package.manifest_path.parent().unwrap().to_owned()
                         } else {
-                            vendor_package(package, ctx)
+                            vendor_package(package)
                         };
 
                         // Generate BUCK rules
-                        let mut buck_rules = if !is_third_party(package, ctx) {
+                        let mut buck_rules = if !is_third_party(package) {
                             buckify_root_node(node, ctx)
                         } else {
                             buckify_dep_node(node, ctx)
@@ -91,8 +92,8 @@ impl BuckalChange {
                     let version = &caps[4];
 
                     buckal_log!("Removing", format!("{} v{}", name, version));
-                    let vendor_dir = get_vendor_dir(id, ctx)
-                        .unwrap_or_exit_ctx("failed to get vendor directory");
+                    let vendor_dir =
+                        get_vendor_dir(id).unwrap_or_exit_ctx("failed to get vendor directory");
                     if vendor_dir.exists() {
                         std::fs::remove_dir_all(&vendor_dir)
                             .expect("Failed to remove vendor directory");
@@ -136,14 +137,12 @@ pub fn flush_root(ctx: &BuckalContext) {
 }
 
 /// Check if a package is a third-party dependency
-pub(super) fn is_third_party(package: &Package, ctx: &BuckalContext) -> bool {
+pub(super) fn is_third_party(package: &Package) -> bool {
     if package.source.is_some() {
         true
     } else {
-        let package_id_spec = ctx
-            .package_id_spec_map
-            .get(&package.id)
-            .expect("Package ID spec not found");
+        let package_id_spec =
+            PackageIdSpec::parse(&package.id.repr).unwrap_or_exit_ctx("failed to parse package ID");
         let buck2_root = get_buck2_root().unwrap_or_exit_ctx("failed to get Buck2 root");
         if let Some(url) = package_id_spec.url() {
             let url_path = get_url_path(url);

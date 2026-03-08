@@ -77,7 +77,6 @@ pub fn buckify_dep_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
     let rust_library = emit_rust_library(
         &package,
         node,
-        &ctx.packages_map,
         lib_target,
         &manifest_dir,
         &package.name,
@@ -101,14 +100,8 @@ pub fn buckify_dep_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
         }
 
         // create the build script rule
-        let buildscript_build = emit_buildscript_build(
-            build_target,
-            &package,
-            node,
-            &ctx.packages_map,
-            &manifest_dir,
-            ctx,
-        );
+        let buildscript_build =
+            emit_buildscript_build(build_target, &package, node, &manifest_dir, ctx);
         buck_rules.push(Rule::RustBinary(buildscript_build));
 
         // create the build script run rule
@@ -163,15 +156,8 @@ pub fn buckify_root_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
     for bin_target in &bin_targets {
         let buckal_name = bin_target.name.to_owned();
 
-        let mut rust_binary = emit_rust_binary(
-            &package,
-            node,
-            &ctx.packages_map,
-            bin_target,
-            &manifest_dir,
-            &buckal_name,
-            ctx,
-        );
+        let mut rust_binary =
+            emit_rust_binary(&package, node, bin_target, &manifest_dir, &buckal_name, ctx);
 
         if lib_targets.iter().any(|l| l.name == bin_target.name) {
             // Cargo allows `main.rs` to use items from `lib.rs` via the crate's own name by default.
@@ -191,29 +177,15 @@ pub fn buckify_root_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
             lib_target.name.to_owned()
         };
 
-        let rust_library = emit_rust_library(
-            &package,
-            node,
-            &ctx.packages_map,
-            lib_target,
-            &manifest_dir,
-            &buckal_name,
-            ctx,
-        );
+        let rust_library =
+            emit_rust_library(&package, node, lib_target, &manifest_dir, &buckal_name, ctx);
 
         buck_rules.push(Rule::RustLibrary(rust_library));
 
         if !ctx.repo_config.ignore_tests && lib_target.test {
             // If the library target has inline tests, emit a rust_test rule for it
-            let rust_test = emit_rust_test(
-                &package,
-                node,
-                &ctx.packages_map,
-                lib_target,
-                &manifest_dir,
-                "unittest",
-                ctx,
-            );
+            let rust_test =
+                emit_rust_test(&package, node, lib_target, &manifest_dir, "unittest", ctx);
 
             buck_rules.push(Rule::RustTest(rust_test));
         }
@@ -227,7 +199,6 @@ pub fn buckify_root_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
             let mut rust_test = emit_rust_test(
                 &package,
                 node,
-                &ctx.packages_map,
                 test_target,
                 &manifest_dir,
                 &buckal_name,
@@ -272,14 +243,8 @@ pub fn buckify_root_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
         }
 
         // create the build script rule
-        let buildscript_build = emit_buildscript_build(
-            build_target,
-            &package,
-            node,
-            &ctx.packages_map,
-            &manifest_dir,
-            ctx,
-        );
+        let buildscript_build =
+            emit_buildscript_build(build_target, &package, node, &manifest_dir, ctx);
         buck_rules.push(Rule::RustBinary(buildscript_build));
 
         // create the build script run rule
@@ -291,9 +256,9 @@ pub fn buckify_root_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
 }
 
 /// Vendors the package sources to `third-party` and returns the path.
-pub fn vendor_package(package: &Package, ctx: &BuckalContext) -> Utf8PathBuf {
+pub fn vendor_package(package: &Package) -> Utf8PathBuf {
     let vendor_dir =
-        get_vendor_dir(&package.id, ctx).unwrap_or_exit_ctx("failed to get vendor directory");
+        get_vendor_dir(&package.id).unwrap_or_exit_ctx("failed to get vendor directory");
     if !vendor_dir.exists() {
         std::fs::create_dir_all(&vendor_dir).expect("Failed to create target directory");
     }
@@ -448,7 +413,6 @@ mod tests {
                 ignore_tests: false,
                 ..RepoConfig::default()
             },
-            package_id_spec_map: HashMap::new(),
             checksums_map: HashMap::new(),
             workspace_root: Utf8PathBuf::from("/tmp"),
             no_merge: false,
@@ -495,7 +459,6 @@ mod tests {
                 ignore_tests: false,
                 ..RepoConfig::default()
             },
-            package_id_spec_map: HashMap::new(),
             checksums_map: HashMap::new(),
             workspace_root: Utf8PathBuf::from("/tmp"),
             no_merge: false,

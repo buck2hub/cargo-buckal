@@ -1,10 +1,7 @@
-use std::{
-    collections::{BTreeSet as Set, HashMap},
-    path::PathBuf,
-};
+use std::{collections::BTreeSet as Set, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
-use cargo_metadata::{DependencyKind, Node, NodeDep, Package, PackageId, Target};
+use cargo_metadata::{DependencyKind, Node, NodeDep, Package, Target};
 
 use crate::{
     buck::{CargoTargetKind, RustRule},
@@ -92,11 +89,7 @@ fn resolve_buckal_name(dep_bin_targets: &[&Target], dep_lib_targets: &[&Target])
     }
 }
 
-fn resolve_dep_label(
-    dep: &NodeDep,
-    dep_package: &Package,
-    ctx: &BuckalContext,
-) -> Result<(String, Option<String>)> {
+fn resolve_dep_label(dep: &NodeDep, dep_package: &Package) -> Result<(String, Option<String>)> {
     let dep_package_name = dep_package.name.to_string();
     let is_renamed = dep.name != dep_package_name.replace("-", "_");
     let alias = if is_renamed {
@@ -105,7 +98,7 @@ fn resolve_dep_label(
         None
     };
 
-    if !is_third_party(dep_package, ctx) {
+    if !is_third_party(dep_package) {
         let label = resolve_first_party_label(dep_package).with_context(|| {
             format!(
                 "failed to resolve first-party label for `{}`",
@@ -118,7 +111,7 @@ fn resolve_dep_label(
         Ok((
             format!(
                 "//{}:{}",
-                get_vendor_path_relative(&dep_package.id, ctx)?,
+                get_vendor_path_relative(&dep_package.id)?,
                 dep_package.name
             ),
             alias,
@@ -208,12 +201,11 @@ fn insert_dep(
 pub(super) fn set_deps(
     rust_rule: &mut dyn RustRule,
     node: &Node,
-    packages_map: &HashMap<PackageId, Package>,
     kind: CargoTargetKind,
     ctx: &BuckalContext,
 ) -> Result<()> {
     for dep in &node.deps {
-        let Some(dep_package) = packages_map.get(&dep.pkg) else {
+        let Some(dep_package) = ctx.packages_map.get(&dep.pkg) else {
             continue;
         };
 
@@ -254,13 +246,12 @@ pub(super) fn set_deps(
             continue;
         }
 
-        let (target_label, alias) =
-            resolve_dep_label(dep, dep_package, ctx).with_context(|| {
-                format!(
-                    "failed to resolve dependency label for '{}' (package '{}')",
-                    dep.name, dep_package.name
-                )
-            })?;
+        let (target_label, alias) = resolve_dep_label(dep, dep_package).with_context(|| {
+            format!(
+                "failed to resolve dependency label for '{}' (package '{}')",
+                dep.name, dep_package.name
+            )
+        })?;
 
         if unconditional {
             insert_dep(rust_rule, &target_label, alias.as_deref(), None)?;
