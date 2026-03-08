@@ -112,7 +112,7 @@ pub fn buckify_dep_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
         buck_rules.push(Rule::RustBinary(buildscript_build));
 
         // create the build script run rule
-        let buildscript_run = emit_buildscript_run(&package, node, &ctx.packages_map, build_target);
+        let buildscript_run = emit_buildscript_run(&package, node, build_target, ctx);
         buck_rules.push(Rule::BuildscriptRun(buildscript_run));
     }
 
@@ -283,17 +283,17 @@ pub fn buckify_root_node(node: &Node, ctx: &BuckalContext) -> Vec<Rule> {
         buck_rules.push(Rule::RustBinary(buildscript_build));
 
         // create the build script run rule
-        let buildscript_run = emit_buildscript_run(&package, node, &ctx.packages_map, build_target);
+        let buildscript_run = emit_buildscript_run(&package, node, build_target, ctx);
         buck_rules.push(Rule::BuildscriptRun(buildscript_run));
     }
 
     buck_rules
 }
 
-/// Vendors the package sources to `third-party/rust/crates/<package_name>/<version>` and returns the path.
-pub fn vendor_package(package: &Package) -> Utf8PathBuf {
-    let vendor_dir = get_vendor_dir(&package.name, &package.version.to_string())
-        .unwrap_or_exit_ctx("failed to get vendor directory");
+/// Vendors the package sources to `third-party` and returns the path.
+pub fn vendor_package(package: &Package, ctx: &BuckalContext) -> Utf8PathBuf {
+    let vendor_dir =
+        get_vendor_dir(&package.id, ctx).unwrap_or_exit_ctx("failed to get vendor directory");
     if !vendor_dir.exists() {
         std::fs::create_dir_all(&vendor_dir).expect("Failed to create target directory");
     }
@@ -448,6 +448,7 @@ mod tests {
                 ignore_tests: false,
                 ..RepoConfig::default()
             },
+            package_id_spec_map: HashMap::new(),
             checksums_map: HashMap::new(),
             workspace_root: Utf8PathBuf::from("/tmp"),
             no_merge: false,
@@ -494,6 +495,7 @@ mod tests {
                 ignore_tests: false,
                 ..RepoConfig::default()
             },
+            package_id_spec_map: HashMap::new(),
             checksums_map: HashMap::new(),
             workspace_root: Utf8PathBuf::from("/tmp"),
             no_merge: false,

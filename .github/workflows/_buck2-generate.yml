@@ -114,7 +114,7 @@ jobs:
           PROJECT_DIR: ${{ inputs.project_dir || inputs.project_name }}
         run: |
           cd "$PROJECT_DIR"
-          rm -f buckal.snap .buckconfig .buckroot BUCK
+          rm -f buckal.snap .buckconfig .buckroot BUCK PACKAGE
           rm -rf third-party toolchains platforms
 
       - name: Configure buckal.toml ignore_tests

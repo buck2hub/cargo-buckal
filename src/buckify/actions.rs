@@ -1,3 +1,4 @@
+use cargo_metadata::Package;
 use regex::Regex;
 
 use crate::{
@@ -5,7 +6,7 @@ use crate::{
     buckal_log,
     cache::{BuckalChange, ChangeType},
     context::BuckalContext,
-    utils::{UnwrapOrExit, get_vendor_dir, is_third_party},
+    utils::{UnwrapOrExit, get_buck2_root, get_url_path, get_vendor_dir},
 };
 
 use super::{
@@ -42,14 +43,14 @@ impl BuckalChange {
                         );
 
                         // Vendor package sources
-                        let vendor_dir = if !is_third_party(package) {
+                        let vendor_dir = if !is_third_party(package, ctx) {
                             package.manifest_path.parent().unwrap().to_owned()
                         } else {
-                            vendor_package(package)
+                            vendor_package(package, ctx)
                         };
 
                         // Generate BUCK rules
-                        let mut buck_rules = if !is_third_party(package) {
+                        let mut buck_rules = if !is_third_party(package, ctx) {
                             buckify_root_node(node, ctx)
                         } else {
                             buckify_dep_node(node, ctx)
@@ -90,7 +91,7 @@ impl BuckalChange {
                     let version = &caps[4];
 
                     buckal_log!("Removing", format!("{} v{}", name, version));
-                    let vendor_dir = get_vendor_dir(name, version)
+                    let vendor_dir = get_vendor_dir(id, ctx)
                         .unwrap_or_exit_ctx("failed to get vendor directory");
                     if vendor_dir.exists() {
                         std::fs::remove_dir_all(&vendor_dir)
@@ -131,5 +132,25 @@ pub fn flush_root(ctx: &BuckalContext) {
         buck_content = windows::patch_root_windows_rustc_flags(buck_content, ctx, root);
         buck_content = cross::patch_rust_test_target_compatible_with(buck_content);
         std::fs::write(&buck_path, buck_content).expect("Failed to write BUCK file");
+    }
+}
+
+/// Check if a package is a third-party dependency
+pub(super) fn is_third_party(package: &Package, ctx: &BuckalContext) -> bool {
+    if package.source.is_some() {
+        true
+    } else {
+        let package_id_spec = ctx
+            .package_id_spec_map
+            .get(&package.id)
+            .expect("Package ID spec not found");
+        let buck2_root = get_buck2_root().unwrap_or_exit_ctx("failed to get Buck2 root");
+        if let Some(url) = package_id_spec.url() {
+            let url_path = get_url_path(url);
+            url_path.strip_prefix(buck2_root.as_str()).is_none()
+        } else {
+            // If there's no URL, we treat it as a first-party package
+            false
+        }
     }
 }

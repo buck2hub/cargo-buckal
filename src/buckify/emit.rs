@@ -7,14 +7,13 @@ use cargo_metadata::{Node, Package, PackageId, Target, camino::Utf8PathBuf};
 use cargo_util_schemas::lockfile::TomlLockfileSourceId;
 
 use crate::{
-    RUST_CRATES_ROOT,
     buck::{
         BuildscriptRun, CargoManifest, CargoTargetKind, FileGroup, GitFetch, Glob, HttpArchive,
         RustBinary, RustLibrary, RustRule, RustTest,
     },
     context::BuckalContext,
     platform::{buck_labels, lookup_platforms},
-    utils::{UnwrapOrExit, get_cfgs, get_target},
+    utils::{UnwrapOrExit, get_cfgs, get_target, get_vendor_path_relative},
 };
 
 use super::deps::{dep_kind_matches, set_deps};
@@ -237,8 +236,8 @@ pub(super) fn emit_buildscript_build(
 pub(super) fn emit_buildscript_run(
     package: &Package,
     node: &Node,
-    packages_map: &HashMap<PackageId, Package>,
     build_target: &Target,
+    ctx: &BuckalContext,
 ) -> BuildscriptRun {
     // create the build script run rule
     let build_name = get_build_name(&build_target.name);
@@ -260,7 +259,7 @@ pub(super) fn emit_buildscript_run(
     // Set environment variables from dependencies
     // See https://doc.rust-lang.org/cargo/reference/build-scripts.html#the-links-manifest-key
     for dep in &node.deps {
-        if let Some(dep_package) = packages_map.get(&dep.pkg)
+        if let Some(dep_package) = ctx.packages_map.get(&dep.pkg)
             && dep_package.links.is_some()
             && dep.dep_kinds.iter().any(|dk| {
                 dep_kind_matches(CargoTargetKind::Lib, dk.kind)
@@ -279,8 +278,8 @@ pub(super) fn emit_buildscript_run(
             if let Some(build_target_dep) = custom_build_target_dep {
                 let build_name_dep = get_build_name(&build_target_dep.name);
                 buildscript_run.env_srcs.insert(format!(
-                    "//{RUST_CRATES_ROOT}/{}/{}:{build_name_dep}-run[metadata]",
-                    dep_package.name, dep_package.version
+                    "//{}:{build_name_dep}-run[metadata]",
+                    get_vendor_path_relative(&dep_package.id, ctx).unwrap_or_exit()
                 ));
             } else {
                 panic!(

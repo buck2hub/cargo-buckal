@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use crate::{
-    RUST_CRATES_ROOT,
     assets::extract_buck2_assets,
     buck2::Buck2Command,
     buckal_error,
@@ -11,7 +10,10 @@ use crate::{
     bundles::{fetch_buckal_cell, init_buckal_cell, init_modifier},
     cache::BuckalCache,
     context::BuckalContext,
-    utils::{UnwrapOrExit, append_buck_out_to_gitignore, ensure_prerequisites, get_buck2_root},
+    utils::{
+        UnwrapOrExit, append_buck_out_to_gitignore, create_third_party_dirs, ensure_prerequisites,
+        get_buck2_root,
+    },
 };
 
 #[derive(Parser, Debug)]
@@ -84,11 +86,8 @@ pub fn execute(args: &MigrateArgs) {
             get_buck2_root().unwrap_or_exit_ctx("failed to get Buck2 project root")
         });
 
-        let crates_dir = buck2_root.join(RUST_CRATES_ROOT);
-        std::fs::create_dir_all(&crates_dir).unwrap_or_exit_ctx(format!(
-            "failed to create third-party rust crates directory at `{}`",
-            crates_dir
-        ));
+        create_third_party_dirs().unwrap_or_exit_ctx("failed to create third-party directories");
+
         append_buck_out_to_gitignore(buck2_root.as_std_path())
             .unwrap_or_exit_ctx("failed to update `.gitignore`");
 

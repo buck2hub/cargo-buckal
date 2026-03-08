@@ -7,15 +7,16 @@ use std::{io, process::Command, str::FromStr};
 
 use anyhow::{Result, bail};
 use cargo_metadata::camino::Utf8PathBuf;
-use cargo_metadata::{MetadataCommand, Package};
+use cargo_metadata::{MetadataCommand, PackageId};
 use cargo_platform::Cfg;
-use cargo_util_schemas::core::PackageIdSpec;
+use cargo_util_schemas::core::SourceKind;
 use colored::Colorize;
 use inquire::Select;
 
-use crate::RUST_CRATES_ROOT;
 use crate::buck2::Buck2Command;
 use crate::cache::BuckalCache;
+use crate::context::BuckalContext;
+use crate::{RUST_CRATES_ROOT, RUST_GIT_ROOT};
 
 #[macro_export]
 macro_rules! buckal_log {
@@ -439,13 +440,62 @@ pub fn get_cache_path() -> Result<Utf8PathBuf> {
     Ok(get_buck2_root()?.join("buckal.snap"))
 }
 
-pub fn get_vendor_dir(name: &str, version: &str) -> Result<Utf8PathBuf> {
-    Ok(get_buck2_root()?.join(format!("{RUST_CRATES_ROOT}/{}/{}", name, version)))
+/// Get the relative vendor path for a given package
+///
+/// This function determines the vendor path based on the package source:
+/// - For registry packages, it returns `third-party/rust/crates/<package>/<version>`
+/// - For git packages, it returns `third-party/rust/git/<package>/<version>`
+pub fn get_vendor_path_relative(package_id: &PackageId, ctx: &BuckalContext) -> Result<String> {
+    let package_id_spec = ctx
+        .package_id_spec_map
+        .get(package_id)
+        .expect("Package ID spec not found");
+    match package_id_spec
+        .kind()
+        .expect("failed to extract package source kind")
+    {
+        SourceKind::Registry => Ok(format!(
+            "{RUST_CRATES_ROOT}/{}/{}",
+            package_id_spec.name(),
+            package_id_spec
+                .version()
+                .expect("failed to extract package version")
+        )),
+        SourceKind::Git(_) => Ok(format!(
+            "{RUST_GIT_ROOT}/{}/{}",
+            package_id_spec.name(),
+            package_id_spec
+                .version()
+                .expect("failed to extract package version")
+        )),
+        _ => bail!(
+            "unsupported source kind for package '{}'",
+            package_id_spec.name()
+        ),
+    }
 }
 
+/// Get the vendor directory for a given package
+pub fn get_vendor_dir(package_id: &PackageId, ctx: &BuckalContext) -> Result<Utf8PathBuf> {
+    Ok(get_buck2_root()?.join(get_vendor_path_relative(package_id, ctx)?))
+}
+
+/// Create the `third-party` directory in the Buck2 project if it doesn't exist
+pub fn create_third_party_dirs() -> Result<()> {
+    let buck2_root = get_buck2_root()?;
+    let crates_dir = buck2_root.join(RUST_CRATES_ROOT);
+    if !crates_dir.exists() {
+        std::fs::create_dir_all(&crates_dir)?;
+    }
+    let git_dir = buck2_root.join(RUST_GIT_ROOT);
+    if !git_dir.exists() {
+        std::fs::create_dir_all(&git_dir)?;
+    }
+    Ok(())
+}
+
+/// Retrieve the last saved BuckalCache from the cache file, or create a new one if the cache file does not exist.
 pub fn get_last_cache() -> BuckalCache {
-    // This function retrieves the last saved BuckalCache from the cache file.
-    // If the cache file does not exist, it returns a snapshot of the current state.
     if let Ok(last_cache) = BuckalCache::load() {
         last_cache
     } else {
@@ -557,27 +607,9 @@ impl<T, E: std::fmt::Display> UnwrapOrExit<T> for Result<T, E> {
     }
 }
 
-/// Check if a package is a third-party dependency
-pub fn is_third_party(package: &Package) -> bool {
-    if package.source.is_some() {
-        true
-    } else {
-        let package_id_spec =
-            PackageIdSpec::parse(&package.id.repr).unwrap_or_exit_ctx("failed to parse package ID");
-        let buck2_root = get_buck2_root().unwrap_or_exit_ctx("failed to get Buck2 root");
-        if let Some(url) = package_id_spec.url() {
-            let url_path = get_url_path(url);
-            url_path.strip_prefix(buck2_root.as_str()).is_none()
-        } else {
-            // If there's no URL, we treat it as a first-party package
-            false
-        }
-    }
-}
-
 /// Get the file path from a URL on Unix platforms (straightforward)
 #[cfg(unix)]
-fn get_url_path(url: &url::Url) -> String {
+pub fn get_url_path(url: &url::Url) -> String {
     url.path().to_owned()
 }
 
@@ -585,7 +617,7 @@ fn get_url_path(url: &url::Url) -> String {
 ///
 /// On Windows, Cargo may produce file URLs that look like `file:///C:/path/to/file`, which includes a leading slash before the drive letter. We need to trim that leading slash and convert forward slashes to backslashes to get a valid Windows path.
 #[cfg(not(unix))]
-fn get_url_path(url: &url::Url) -> String {
+pub fn get_url_path(url: &url::Url) -> String {
     let path = url.path();
     if path.starts_with('/') && path.chars().nth(2) == Some(':') {
         path[1..].replace('/', "\\").to_owned()

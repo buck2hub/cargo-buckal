@@ -8,7 +8,8 @@ use starlark_syntax::syntax::ast::{
 use starlark_syntax::syntax::module::AstModuleFields;
 use starlark_syntax::syntax::{AstModule, Dialect};
 
-use crate::{RUST_CRATES_ROOT, context::BuckalContext};
+use crate::context::BuckalContext;
+use crate::utils::{UnwrapOrExit, get_vendor_path_relative};
 
 #[derive(Default)]
 struct WindowsImportLibFlags {
@@ -97,8 +98,8 @@ fn windows_import_lib_flags(ctx: &BuckalContext) -> WindowsImportLibFlags {
         matches.sort_by(|a, b| a.version.cmp(&b.version));
         for package in matches {
             out.push(format!(
-                "@$(location //{}/{}/{}:build-script-run[rustc_flags])",
-                RUST_CRATES_ROOT, package.name, package.version
+                "@$(location //{}:build-script-run[rustc_flags])",
+                get_vendor_path_relative(&package.id, ctx).unwrap_or_exit()
             ));
         }
     };

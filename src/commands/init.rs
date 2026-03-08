@@ -6,13 +6,13 @@ use std::{
 use clap::Parser;
 
 use crate::{
-    RUST_CRATES_ROOT,
     assets::extract_buck2_assets,
     buck2::Buck2Command,
     buckal_error, buckal_log, buckal_note,
     bundles::{init_buckal_cell, init_modifier},
     utils::{
-        UnwrapOrExit, append_buck_out_to_gitignore, ensure_prerequisites, find_buck2_project_root,
+        UnwrapOrExit, append_buck_out_to_gitignore, create_third_party_dirs, ensure_prerequisites,
+        find_buck2_project_root,
     },
 };
 
@@ -86,8 +86,7 @@ pub fn execute(args: &InitArgs) {
     if args.repo || args.lite {
         // Init a new buck2 repo
         Buck2Command::init().execute().unwrap_or_exit();
-        std::fs::create_dir_all(RUST_CRATES_ROOT)
-            .unwrap_or_exit_ctx("failed to create third-party directory");
+        create_third_party_dirs().unwrap_or_exit_ctx("failed to create third-party directories");
         let cwd = std::env::current_dir().unwrap_or_exit();
         append_buck_out_to_gitignore(&cwd).unwrap_or_exit_ctx("failed to update `.gitignore`");
 

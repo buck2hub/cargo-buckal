@@ -7,12 +7,12 @@ use anyhow::{Context, Result, bail};
 use cargo_metadata::{DependencyKind, Node, NodeDep, Package, PackageId, Target};
 
 use crate::{
-    RUST_CRATES_ROOT,
     buck::{CargoTargetKind, RustRule},
     buckal_note, buckal_warn,
+    buckify::actions::is_third_party,
     context::BuckalContext,
     platform::{Os, oses_from_platform, platform_is_target_only},
-    utils::{get_buck2_root, is_third_party},
+    utils::{get_buck2_root, get_vendor_path_relative},
 };
 
 pub(super) fn dep_kind_matches(target_kind: CargoTargetKind, dep_kind: DependencyKind) -> bool {
@@ -92,7 +92,11 @@ fn resolve_buckal_name(dep_bin_targets: &[&Target], dep_lib_targets: &[&Target])
     }
 }
 
-fn resolve_dep_label(dep: &NodeDep, dep_package: &Package) -> Result<(String, Option<String>)> {
+fn resolve_dep_label(
+    dep: &NodeDep,
+    dep_package: &Package,
+    ctx: &BuckalContext,
+) -> Result<(String, Option<String>)> {
     let dep_package_name = dep_package.name.to_string();
     let is_renamed = dep.name != dep_package_name.replace("-", "_");
     let alias = if is_renamed {
@@ -101,7 +105,7 @@ fn resolve_dep_label(dep: &NodeDep, dep_package: &Package) -> Result<(String, Op
         None
     };
 
-    if !is_third_party(dep_package) {
+    if !is_third_party(dep_package, ctx) {
         let label = resolve_first_party_label(dep_package).with_context(|| {
             format!(
                 "failed to resolve first-party label for `{}`",
@@ -113,8 +117,9 @@ fn resolve_dep_label(dep: &NodeDep, dep_package: &Package) -> Result<(String, Op
         // third-party dependency
         Ok((
             format!(
-                "//{RUST_CRATES_ROOT}/{}/{}:{}",
-                dep_package.name, dep_package.version, dep_package.name
+                "//{}:{}",
+                get_vendor_path_relative(&dep_package.id, ctx)?,
+                dep_package.name
             ),
             alias,
         ))
@@ -205,7 +210,7 @@ pub(super) fn set_deps(
     node: &Node,
     packages_map: &HashMap<PackageId, Package>,
     kind: CargoTargetKind,
-    _ctx: &BuckalContext,
+    ctx: &BuckalContext,
 ) -> Result<()> {
     for dep in &node.deps {
         let Some(dep_package) = packages_map.get(&dep.pkg) else {
@@ -249,12 +254,13 @@ pub(super) fn set_deps(
             continue;
         }
 
-        let (target_label, alias) = resolve_dep_label(dep, dep_package).with_context(|| {
-            format!(
-                "failed to resolve dependency label for '{}' (package '{}')",
-                dep.name, dep_package.name
-            )
-        })?;
+        let (target_label, alias) =
+            resolve_dep_label(dep, dep_package, ctx).with_context(|| {
+                format!(
+                    "failed to resolve dependency label for '{}' (package '{}')",
+                    dep.name, dep_package.name
+                )
+            })?;
 
         if unconditional {
             insert_dep(rust_rule, &target_label, alias.as_deref(), None)?;

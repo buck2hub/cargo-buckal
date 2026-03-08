@@ -8,7 +8,7 @@ use sha1::{Digest, Sha1};
 use walkdir::WalkDir;
 
 use crate::{
-    RUST_CRATES_ROOT, buckal_error, buckal_log,
+    RUST_ROOT, buckal_error, buckal_log,
     config::Config,
     registry::{
         SessionCompleteRequest, SessionCompleteResponse, SessionFileResponse, SessionManifestFile,
@@ -69,7 +69,7 @@ pub fn execute(args: &PushArgs) {
                 files: vec![],
             };
             let buck2_root = get_buck2_root().unwrap_or_exit();
-            let third_party_dir = buck2_root.join(RUST_CRATES_ROOT);
+            let third_party_dir = buck2_root.join(RUST_ROOT);
             for entry in WalkDir::new(&third_party_dir).into_iter() {
                 let entry = entry.unwrap_or_exit_ctx("failed to read third-party directory");
                 let entry_path = entry.path();
