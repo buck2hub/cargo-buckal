@@ -566,11 +566,31 @@ pub fn is_third_party(package: &Package) -> bool {
             PackageIdSpec::parse(&package.id.repr).unwrap_or_exit_ctx("failed to parse package ID");
         let buck2_root = get_buck2_root().unwrap_or_exit_ctx("failed to get Buck2 root");
         if let Some(url) = package_id_spec.url() {
-            url.path().strip_prefix(buck2_root.as_str()).is_none()
+            let url_path = get_url_path(url);
+            url_path.strip_prefix(buck2_root.as_str()).is_none()
         } else {
             // If there's no URL, we treat it as a first-party package
             false
         }
+    }
+}
+
+/// Get the file path from a URL on Unix platforms (straightforward)
+#[cfg(unix)]
+fn get_url_path(url: &url::Url) -> String {
+    url.path().to_owned()
+}
+
+/// Get the file path from a URL on non-Unix platforms, handling drive letters and backslashes
+///
+/// On Windows, Cargo may produce file URLs that look like `file:///C:/path/to/file`, which includes a leading slash before the drive letter. We need to trim that leading slash and convert forward slashes to backslashes to get a valid Windows path.
+#[cfg(not(unix))]
+fn get_url_path(url: &url::Url) -> String {
+    let path = url.path();
+    if path.starts_with('/') && path.chars().nth(2) == Some(':') {
+        path[1..].replace('/', "\\").to_owned()
+    } else {
+        path.to_owned()
     }
 }
 

@@ -81,9 +81,6 @@ pub fn execute(args: &InitArgs) {
         buckal_log!("Creating", "buck2 repository");
         std::fs::remove_dir_all("./src").unwrap_or_exit();
         std::fs::remove_file("./Cargo.toml").unwrap_or_exit();
-        buckal_note!(
-            "You should manually configure a Cargo workspace before running `cargo buckal new <path>` to create packages."
-        );
     }
 
     if args.repo || args.lite {
