@@ -75,7 +75,7 @@ If no configuration file exists, cargo-buckal will use `buck2` (searches your PA
 
 ## Troubleshooting
 
-### Linux: `libpython*.so` not found when running `cargo buckal`
+### Linux: `libpython*.so` not found when running `cargo buckal` (before 0.1.3)
 
 If you see an error like:
 
