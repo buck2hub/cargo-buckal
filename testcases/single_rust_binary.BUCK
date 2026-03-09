@@ -1,0 +1,18 @@
+rust_binary(
+    name = "example_bin",
+    srcs = ["src/main.rs"],
+    crate = "example_bin",
+    crate_root = "src/main.rs",
+    edition = "2024",
+    target_compatible_with = ["prelude//os/constraints:windows"],
+    compatible_with = ["prelude//os/constraints:linux"],
+    exec_compatible_with = ["prelude//os/constraints:macos"],
+    env = {"RUST_LOG": "debug"},
+    features = ["default"],
+    rustc_flags = ["@$(location :manifest[env_flags])"],
+    deps = [":dep"],
+    os_deps = {"linux": [":linux_dep"]},
+    named_deps = {"serde": ":serde_dep"},
+    os_named_deps = {"win_dep": {"windows": ":windows_dep"}},
+    visibility = ["PUBLIC"],
+)

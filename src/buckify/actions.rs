@@ -1,9 +1,9 @@
-use cargo_metadata::Package;
+use cargo_metadata::{Package, camino::Utf8PathBuf};
 use cargo_util_schemas::core::PackageIdSpec;
 use regex::Regex;
 
 use crate::{
-    buck::{parse_buck_file, patch_buck_rules},
+    buck::{Rule, parse_buck_file, patch_buck_rules},
     buckal_log,
     cache::{BuckalChange, ChangeType},
     context::BuckalContext,
@@ -59,20 +59,7 @@ impl BuckalChange {
 
                         // Patch BUCK Rules
                         let buck_path = vendor_dir.join("BUCK");
-                        if buck_path.exists() {
-                            // Skip merging manual changes if `--no-merge` is set
-                            if !ctx.no_merge && !ctx.repo_config.patch_fields.is_empty() {
-                                let existing_rules = parse_buck_file(&buck_path)
-                                    .expect("Failed to parse existing BUCK file");
-                                patch_buck_rules(
-                                    &existing_rules,
-                                    &mut buck_rules,
-                                    &ctx.repo_config.patch_fields,
-                                );
-                            }
-                        } else {
-                            std::fs::File::create(&buck_path).expect("Failed to create BUCK file");
-                        }
+                        merge_rules(&buck_path, &mut buck_rules, ctx);
 
                         // Generate the BUCK file
                         let mut buck_content = gen_buck_content(&buck_rules);
@@ -126,7 +113,10 @@ pub fn flush_root(ctx: &BuckalContext) {
         let buck_path = manifest_dir.join("BUCK");
 
         // Generate BUCK rules
-        let buck_rules = buckify_root_node(root_node, ctx);
+        let mut buck_rules = buckify_root_node(root_node, ctx);
+
+        // Patch BUCK Rules
+        merge_rules(&buck_path, &mut buck_rules, ctx);
 
         // Generate the BUCK file
         let mut buck_content = gen_buck_content(&buck_rules);
@@ -151,5 +141,19 @@ pub(super) fn is_third_party(package: &Package) -> bool {
             // If there's no URL, we treat it as a first-party package
             false
         }
+    }
+}
+
+/// Merge existing BUCK rules with new ones, preserving manual changes in specified fields.
+fn merge_rules(buck_path: &Utf8PathBuf, buck_rules: &mut [Rule], ctx: &BuckalContext) {
+    if buck_path.exists() {
+        // Skip merging manual changes if `--no-merge` is set
+        if !ctx.no_merge && !ctx.repo_config.patch_fields.is_empty() {
+            let existing_rules =
+                parse_buck_file(buck_path).expect("Failed to parse existing BUCK file");
+            patch_buck_rules(&existing_rules, buck_rules, &ctx.repo_config.patch_fields);
+        }
+    } else {
+        std::fs::File::create(buck_path).expect("Failed to create BUCK file");
     }
 }
