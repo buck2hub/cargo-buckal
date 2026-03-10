@@ -12,7 +12,7 @@ You can install the latest stable release from crates.io:
 cargo install cargo-buckal
 ```
 
-To install the latest development version from the active repository:
+Or, to install the latest development version from the active repository:
 
 ```bash
 cargo install --git https://github.com/buck2hub/cargo-buckal.git
@@ -20,7 +20,7 @@ cargo install --git https://github.com/buck2hub/cargo-buckal.git
 
 > [!NOTE]
 >
-> Buckal requires [Buck2](https://buck2.build/) and [Python3](https://www.python.org/). Please ensure both are installed on your system before proceeding.
+> Buckal requires [Buck2](https://buck2.build/). Please ensure it's installed on your system before proceeding.
 
 ## Usage
 
@@ -72,32 +72,6 @@ buck2_binary = "/path/to/your/buck2"
 ```
 
 If no configuration file exists, cargo-buckal will use `buck2` (searches your PATH).
-
-## Troubleshooting
-
-### Linux: `libpython*.so` not found when running `cargo buckal` (before 0.1.3)
-
-If you see an error like:
-
-```text
-$HOME/.cargo/bin/cargo-buckal: error while loading shared libraries: libpython3.13.so.1.0: cannot open shared object file: No such file or directory
-```
-
-`cargo-buckal` may have been built against a different Python shared library version than the one currently installed. This happens because PyO3 links to a specific Python version at compile time.
-
-To fix it, reinstall with `PYO3_PYTHON` set to an available Python executable:
-
-```bash
-python3 --version
-ls /usr/lib/libpython3*
-PYO3_PYTHON=python3.12 cargo install --force --git https://github.com/buck2hub/cargo-buckal.git
-```
-
-If you install from crates.io instead of Git, use:
-
-```bash
-PYO3_PYTHON=python3.12 cargo install --force cargo-buckal
-```
 
 ## Pre-commit Hooks
 

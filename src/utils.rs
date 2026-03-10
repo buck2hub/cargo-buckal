@@ -511,14 +511,6 @@ pub fn section(title: &str) {
     println!("{}{}{}", left_pad, content, right_pad);
 }
 
-pub fn check_python3_installed() -> bool {
-    Command::new("python3")
-        .arg("--version")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
 /// Quick check if rustc is available before spawning multiple threads.
 pub fn check_rustc_installed() -> bool {
     Command::new("rustc")
@@ -537,19 +529,9 @@ pub fn ensure_rustc_installed() -> io::Result<()> {
     Ok(())
 }
 
-pub fn ensure_python3_installed() -> io::Result<()> {
-    if !check_python3_installed() {
-        return Err(io::Error::other(
-            "Python 3 is required but not installed. Please install Python 3 and try again.",
-        ));
-    }
-    Ok(())
-}
-
 pub fn ensure_prerequisites() -> io::Result<()> {
     ensure_rustc_installed()?;
     ensure_buck2_installed()?;
-    ensure_python3_installed()?;
     Ok(())
 }
 
