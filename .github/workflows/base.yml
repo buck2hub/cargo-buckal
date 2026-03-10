@@ -26,7 +26,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-rust-toolchains
       - uses: j178/prek-action@v1
-      
+
   build:
     name: Cargo Build
     runs-on: ubuntu-latest

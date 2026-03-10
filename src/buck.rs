@@ -277,7 +277,7 @@ impl Glob {
 
             return Ok(Glob { include, exclude });
         }
-        Ok(Glob::default())
+        Err(anyhow::anyhow!("Missing or malformed glob call"))
     }
 }
 
@@ -457,7 +457,10 @@ impl RuleKwargs {
         self.args
             .get(key)
             .map(Glob::from_ast_expr)
-            .unwrap_or(Ok(Glob::default()))
+            .unwrap_or(Err(anyhow::anyhow!(
+                "Missing required glob argument: {}",
+                key
+            )))
     }
 }
 
