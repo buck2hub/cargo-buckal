@@ -1,4 +1,4 @@
-use cargo_metadata::{Package, camino::Utf8PathBuf};
+use cargo_metadata::{Package, camino::Utf8Path};
 use cargo_util_schemas::core::PackageIdSpec;
 use regex::Regex;
 
@@ -145,15 +145,16 @@ pub(super) fn is_third_party(package: &Package) -> bool {
 }
 
 /// Merge existing BUCK rules with new ones, preserving manual changes in specified fields.
-fn merge_rules(buck_path: &Utf8PathBuf, buck_rules: &mut [Rule], ctx: &BuckalContext) {
+fn merge_rules(buck_path: &Utf8Path, buck_rules: &mut [Rule], ctx: &BuckalContext) {
     if buck_path.exists() {
         // Skip merging manual changes if `--no-merge` is set
         if !ctx.no_merge && !ctx.repo_config.patch_fields.is_empty() {
-            let existing_rules =
-                parse_buck_file(buck_path).expect("Failed to parse existing BUCK file");
+            let existing_rules = parse_buck_file(buck_path)
+                .unwrap_or_exit_ctx(format!("Failed to parse {}", buck_path));
             patch_buck_rules(&existing_rules, buck_rules, &ctx.repo_config.patch_fields);
         }
     } else {
-        std::fs::File::create(buck_path).expect("Failed to create BUCK file");
+        std::fs::File::create(buck_path)
+            .unwrap_or_exit_ctx(format!("Failed to create {}", buck_path));
     }
 }

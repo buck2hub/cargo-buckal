@@ -32,3 +32,13 @@ rust_library(
     }) + ["@$(location :manifest[env_flags])"],
     visibility = ["PUBLIC"],
 )
+
+rust_library(
+    name = "merge_both_sides",
+    srcs = ["src/lib.rs"],
+    crate = "merge_both_sides",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    rustc_flags = ["@$(location //third-party/rust/crates/windows:build-script-run[rustc_flags])"] + ["@$(location :manifest[env_flags])"],
+    visibility = ["PUBLIC"],
+)

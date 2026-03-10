@@ -7,6 +7,8 @@ use starlark_syntax::syntax::ast::{ArgumentP, AstExpr, AstNoPayload, AstStmt, Ex
 use starlark_syntax::syntax::module::AstModuleFields;
 use starlark_syntax::syntax::{AstModule, Dialect};
 
+use crate::buckal_error;
+
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(untagged)]
 pub enum Rule {
@@ -52,42 +54,6 @@ pub enum CargoTargetKind {
 pub struct Load {
     pub bzl: String,
     pub items: Set<String>,
-}
-
-impl Load {
-    fn from_ast_args(
-        args: &[starlark_syntax::codemap::Spanned<ArgumentP<AstNoPayload>>],
-    ) -> anyhow::Result<Self> {
-        // load("file.bzl", "symbol1", "symbol2", ...)
-        // First positional arg is the bzl file path, rest are imported symbols
-        if args.is_empty() {
-            anyhow::bail!("load() requires at least one argument (bzl file path)");
-        }
-
-        let mut bzl = None;
-        let mut items = Set::new();
-
-        for (idx, arg) in args.iter().enumerate() {
-            match &arg.node {
-                ArgumentP::Positional(expr) => {
-                    if let Some(s) = extract_string(expr) {
-                        if idx == 0 {
-                            bzl = Some(s);
-                        } else {
-                            items.insert(s);
-                        }
-                    }
-                }
-                ArgumentP::Named(_, _) => {
-                    // load() doesn't typically use named args, but we could handle them
-                }
-                _ => {}
-            }
-        }
-
-        let bzl = bzl.ok_or_else(|| anyhow::anyhow!("load() missing bzl file path"))?;
-        Ok(Load { bzl, items })
-    }
 }
 
 #[derive(Serialize, Default, Debug, PartialEq)]
@@ -317,19 +283,21 @@ impl Glob {
 
 // Helper to extract string list from AST expression
 fn extract_string_list(expr: &AstExpr) -> Option<Set<String>> {
-    // Handle binary operations like: ["item1"] + select({...}) or select({...}) + ["item2"]
+    // Handle binary operations like: `["item1"] + select({...})` or `select({...}) + ["item2"]`
     // We only extract the literal list part, ignoring dynamic select() regardless of order
+    // For `["item1"] + ["item2"]`, we combine both sides into a single set
     if let ExprP::Op(left, _op, right) = &expr.node {
-        // For static analysis, try to extract from left operand first
-        if let Some(result) = extract_string_list(left) {
-            return Some(result);
+        let left_items = extract_string_list(left);
+        let right_items = extract_string_list(right);
+        match (left_items, right_items) {
+            (Some(mut l), Some(r)) => {
+                l.extend(r);
+                return Some(l);
+            }
+            (Some(l), None) => return Some(l),
+            (None, Some(r)) => return Some(r),
+            (None, None) => return None,
         }
-        // If left is not a literal list (e.g., select()), try right operand
-        if let Some(result) = extract_string_list(right) {
-            return Some(result);
-        }
-        // Neither side is a literal list
-        return None;
     }
 
     if let ExprP::List(items) = &expr.node {
@@ -493,83 +461,39 @@ impl RuleKwargs {
     }
 }
 
-impl RustRule for RustLibrary {
-    fn deps_mut(&mut self) -> &mut Set<String> {
-        &mut self.deps
-    }
+macro_rules! impl_rust_rule {
+    ($ty:ident) => {
+        impl RustRule for $ty {
+            fn deps_mut(&mut self) -> &mut Set<String> {
+                &mut self.deps
+            }
 
-    fn os_deps_mut(&mut self) -> &mut Map<String, Set<String>> {
-        &mut self.os_deps
-    }
+            fn os_deps_mut(&mut self) -> &mut Map<String, Set<String>> {
+                &mut self.os_deps
+            }
 
-    fn rustc_flags_mut(&mut self) -> &mut Set<String> {
-        &mut self.rustc_flags
-    }
+            fn rustc_flags_mut(&mut self) -> &mut Set<String> {
+                &mut self.rustc_flags
+            }
 
-    fn env_mut(&mut self) -> &mut Map<String, String> {
-        &mut self.env
-    }
+            fn env_mut(&mut self) -> &mut Map<String, String> {
+                &mut self.env
+            }
 
-    fn named_deps_mut(&mut self) -> &mut Map<String, String> {
-        &mut self.named_deps
-    }
+            fn named_deps_mut(&mut self) -> &mut Map<String, String> {
+                &mut self.named_deps
+            }
 
-    fn os_named_deps_mut(&mut self) -> &mut Map<String, Map<String, String>> {
-        &mut self.os_named_deps
-    }
+            fn os_named_deps_mut(&mut self) -> &mut Map<String, Map<String, String>> {
+                &mut self.os_named_deps
+            }
+        }
+    };
 }
 
-impl RustRule for RustBinary {
-    fn deps_mut(&mut self) -> &mut Set<String> {
-        &mut self.deps
-    }
-
-    fn os_deps_mut(&mut self) -> &mut Map<String, Set<String>> {
-        &mut self.os_deps
-    }
-
-    fn rustc_flags_mut(&mut self) -> &mut Set<String> {
-        &mut self.rustc_flags
-    }
-
-    fn env_mut(&mut self) -> &mut Map<String, String> {
-        &mut self.env
-    }
-
-    fn named_deps_mut(&mut self) -> &mut Map<String, String> {
-        &mut self.named_deps
-    }
-
-    fn os_named_deps_mut(&mut self) -> &mut Map<String, Map<String, String>> {
-        &mut self.os_named_deps
-    }
-}
-
-impl RustRule for RustTest {
-    fn deps_mut(&mut self) -> &mut Set<String> {
-        &mut self.deps
-    }
-
-    fn os_deps_mut(&mut self) -> &mut Map<String, Set<String>> {
-        &mut self.os_deps
-    }
-
-    fn rustc_flags_mut(&mut self) -> &mut Set<String> {
-        &mut self.rustc_flags
-    }
-
-    fn env_mut(&mut self) -> &mut Map<String, String> {
-        &mut self.env
-    }
-
-    fn named_deps_mut(&mut self) -> &mut Map<String, String> {
-        &mut self.named_deps
-    }
-
-    fn os_named_deps_mut(&mut self) -> &mut Map<String, Map<String, String>> {
-        &mut self.os_named_deps
-    }
-}
+impl_rust_rule!(RustLibrary);
+impl_rust_rule!(RustBinary);
+impl_rust_rule!(RustTest);
 
 fn patch_map<K, V>(dst: &mut Map<K, V>, src: &Map<K, V>)
 where
@@ -626,6 +550,64 @@ fn patch_deps_fields(patch_fields: &Set<String>, dst: &mut DepFieldsMut, src: &D
     }
 }
 
+macro_rules! impl_patch_from {
+    ($ty:ident) => {
+        impl $ty {
+            fn patch_from(&mut self, other: &Self, patch_fields: &Set<String>) {
+                // Patch target_compatible_with set
+                if patch_fields.contains("target_compatible_with") {
+                    patch_set(
+                        &mut self.target_compatible_with,
+                        &other.target_compatible_with,
+                    );
+                }
+                // Patch compatible_with set
+                if patch_fields.contains("compatible_with") {
+                    patch_set(&mut self.compatible_with, &other.compatible_with);
+                }
+                // Patch exec_compatible_with set
+                if patch_fields.contains("exec_compatible_with") {
+                    patch_set(&mut self.exec_compatible_with, &other.exec_compatible_with);
+                }
+                // Patch env map
+                if patch_fields.contains("env") {
+                    patch_map(&mut self.env, &other.env);
+                }
+                // Patch features set
+                if patch_fields.contains("features") {
+                    patch_set(&mut self.features, &other.features);
+                }
+                // Patch rustc_flags set
+                if patch_fields.contains("rustc_flags") {
+                    patch_set(&mut self.rustc_flags, &other.rustc_flags);
+                }
+                // Patch visibility set
+                if patch_fields.contains("visibility") {
+                    patch_set(&mut self.visibility, &other.visibility);
+                }
+
+                let mut dst = DepFieldsMut {
+                    deps: &mut self.deps,
+                    os_deps: &mut self.os_deps,
+                    named_deps: &mut self.named_deps,
+                    os_named_deps: &mut self.os_named_deps,
+                };
+                let src = DepFieldsRef {
+                    deps: &other.deps,
+                    os_deps: &other.os_deps,
+                    named_deps: &other.named_deps,
+                    os_named_deps: &other.os_named_deps,
+                };
+                patch_deps_fields(patch_fields, &mut dst, &src);
+            }
+        }
+    };
+}
+
+impl_patch_from!(RustLibrary);
+impl_patch_from!(RustBinary);
+impl_patch_from!(RustTest);
+
 impl RustLibrary {
     fn from_kwargs(kwargs: &RuleKwargs) -> anyhow::Result<Self> {
         let name = kwargs.get_str("name")?;
@@ -664,54 +646,6 @@ impl RustLibrary {
             visibility,
             deps,
         })
-    }
-
-    fn patch_from(&mut self, other: &RustLibrary, patch_fields: &Set<String>) {
-        // Patch target_compatible_with set
-        if patch_fields.contains("target_compatible_with") {
-            patch_set(
-                &mut self.target_compatible_with,
-                &other.target_compatible_with,
-            );
-        }
-        // Patch compatible_with set
-        if patch_fields.contains("compatible_with") {
-            patch_set(&mut self.compatible_with, &other.compatible_with);
-        }
-        // Patch exec_compatible_with set
-        if patch_fields.contains("exec_compatible_with") {
-            patch_set(&mut self.exec_compatible_with, &other.exec_compatible_with);
-        }
-        // Patch env map
-        if patch_fields.contains("env") {
-            patch_map(&mut self.env, &other.env);
-        }
-        // Patch features set
-        if patch_fields.contains("features") {
-            patch_set(&mut self.features, &other.features);
-        }
-        // Patch rustc_flags set
-        if patch_fields.contains("rustc_flags") {
-            patch_set(&mut self.rustc_flags, &other.rustc_flags);
-        }
-        // Patch visibility set
-        if patch_fields.contains("visibility") {
-            patch_set(&mut self.visibility, &other.visibility);
-        }
-
-        let mut dst = DepFieldsMut {
-            deps: &mut self.deps,
-            os_deps: &mut self.os_deps,
-            named_deps: &mut self.named_deps,
-            os_named_deps: &mut self.os_named_deps,
-        };
-        let src = DepFieldsRef {
-            deps: &other.deps,
-            os_deps: &other.os_deps,
-            named_deps: &other.named_deps,
-            os_named_deps: &other.os_named_deps,
-        };
-        patch_deps_fields(patch_fields, &mut dst, &src);
     }
 }
 
@@ -752,54 +686,6 @@ impl RustBinary {
             deps,
         })
     }
-
-    fn patch_from(&mut self, other: &RustBinary, patch_fields: &Set<String>) {
-        // Patch target_compatible_with set
-        if patch_fields.contains("target_compatible_with") {
-            patch_set(
-                &mut self.target_compatible_with,
-                &other.target_compatible_with,
-            );
-        }
-        // Patch compatible_with set
-        if patch_fields.contains("compatible_with") {
-            patch_set(&mut self.compatible_with, &other.compatible_with);
-        }
-        // Patch exec_compatible_with set
-        if patch_fields.contains("exec_compatible_with") {
-            patch_set(&mut self.exec_compatible_with, &other.exec_compatible_with);
-        }
-        // Patch env map
-        if patch_fields.contains("env") {
-            patch_map(&mut self.env, &other.env);
-        }
-        // Patch features set
-        if patch_fields.contains("features") {
-            patch_set(&mut self.features, &other.features);
-        }
-        // Patch rustc_flags set
-        if patch_fields.contains("rustc_flags") {
-            patch_set(&mut self.rustc_flags, &other.rustc_flags);
-        }
-        // Patch visibility set
-        if patch_fields.contains("visibility") {
-            patch_set(&mut self.visibility, &other.visibility);
-        }
-
-        let mut dst = DepFieldsMut {
-            deps: &mut self.deps,
-            os_deps: &mut self.os_deps,
-            named_deps: &mut self.named_deps,
-            os_named_deps: &mut self.os_named_deps,
-        };
-        let src = DepFieldsRef {
-            deps: &other.deps,
-            os_deps: &other.os_deps,
-            named_deps: &other.named_deps,
-            os_named_deps: &other.os_named_deps,
-        };
-        patch_deps_fields(patch_fields, &mut dst, &src);
-    }
 }
 
 impl RustTest {
@@ -838,54 +724,6 @@ impl RustTest {
             visibility,
             deps,
         })
-    }
-
-    fn patch_from(&mut self, other: &RustTest, patch_fields: &Set<String>) {
-        // Patch target_compatible_with set
-        if patch_fields.contains("target_compatible_with") {
-            patch_set(
-                &mut self.target_compatible_with,
-                &other.target_compatible_with,
-            );
-        }
-        // Patch compatible_with set
-        if patch_fields.contains("compatible_with") {
-            patch_set(&mut self.compatible_with, &other.compatible_with);
-        }
-        // Patch exec_compatible_with set
-        if patch_fields.contains("exec_compatible_with") {
-            patch_set(&mut self.exec_compatible_with, &other.exec_compatible_with);
-        }
-        // Patch env map
-        if patch_fields.contains("env") {
-            patch_map(&mut self.env, &other.env);
-        }
-        // Patch features set
-        if patch_fields.contains("features") {
-            patch_set(&mut self.features, &other.features);
-        }
-        // Patch rustc_flags set
-        if patch_fields.contains("rustc_flags") {
-            patch_set(&mut self.rustc_flags, &other.rustc_flags);
-        }
-        // Patch visibility set
-        if patch_fields.contains("visibility") {
-            patch_set(&mut self.visibility, &other.visibility);
-        }
-
-        let mut dst = DepFieldsMut {
-            deps: &mut self.deps,
-            os_deps: &mut self.os_deps,
-            named_deps: &mut self.named_deps,
-            os_named_deps: &mut self.os_named_deps,
-        };
-        let src = DepFieldsRef {
-            deps: &other.deps,
-            os_deps: &other.os_deps,
-            named_deps: &other.named_deps,
-            os_named_deps: &other.os_named_deps,
-        };
-        patch_deps_fields(patch_fields, &mut dst, &src);
     }
 }
 
@@ -979,28 +817,39 @@ fn parse_rule_from_call(
     func_name: &str,
     args: &[starlark_syntax::codemap::Spanned<ArgumentP<AstNoPayload>>],
 ) -> Option<Rule> {
-    // load() has special syntax (positional args), handle it separately
-    if func_name == "load" {
-        return Load::from_ast_args(args).ok().map(Rule::Load);
-    }
-
     let kwargs = RuleKwargs::from_ast_args(args);
 
     match func_name {
         "rust_library" => RustLibrary::from_kwargs(&kwargs)
+            .inspect_err(|e| buckal_error!("failed to parse rust_library: {}", e))
             .ok()
             .map(Rule::RustLibrary),
-        "rust_binary" => RustBinary::from_kwargs(&kwargs).ok().map(Rule::RustBinary),
-        "rust_test" => RustTest::from_kwargs(&kwargs).ok().map(Rule::RustTest),
+        "rust_binary" => RustBinary::from_kwargs(&kwargs)
+            .inspect_err(|e| buckal_error!("failed to parse rust_binary: {}", e))
+            .ok()
+            .map(Rule::RustBinary),
+        "rust_test" => RustTest::from_kwargs(&kwargs)
+            .inspect_err(|e| buckal_error!("failed to parse rust_test: {}", e))
+            .ok()
+            .map(Rule::RustTest),
         "buildscript_run" => BuildscriptRun::from_kwargs(&kwargs)
+            .inspect_err(|e| buckal_error!("failed to parse buildscript_run: {}", e))
             .ok()
             .map(Rule::BuildscriptRun),
         "http_archive" => HttpArchive::from_kwargs(&kwargs)
+            .inspect_err(|e| buckal_error!("failed to parse http_archive: {}", e))
             .ok()
             .map(Rule::HttpArchive),
-        "git_fetch" => GitFetch::from_kwargs(&kwargs).ok().map(Rule::GitFetch),
-        "filegroup" => FileGroup::from_kwargs(&kwargs).ok().map(Rule::FileGroup),
+        "git_fetch" => GitFetch::from_kwargs(&kwargs)
+            .inspect_err(|e| buckal_error!("failed to parse git_fetch: {}", e))
+            .ok()
+            .map(Rule::GitFetch),
+        "filegroup" => FileGroup::from_kwargs(&kwargs)
+            .inspect_err(|e| buckal_error!("failed to parse filegroup: {}", e))
+            .ok()
+            .map(Rule::FileGroup),
         "cargo_manifest" => CargoManifest::from_kwargs(&kwargs)
+            .inspect_err(|e| buckal_error!("failed to parse cargo_manifest: {}", e))
             .ok()
             .map(Rule::CargoManifest),
         _ => None,
@@ -1992,32 +1841,60 @@ mod tests {
     fn test_parsing_literal_with_dynamic_select() {
         let rules = parse_buck_file(get_test_file("literal_with_dynamic_select.BUCK"))
             .expect("parse should succeed");
-        let rule = rules
-            .get("rust_library[with_select]")
-            .expect("rust_library rule should be present");
 
-        if let Rule::RustLibrary(lib) = rule {
-            assert!(
-                lib.rustc_flags
-                    .contains("@$(location :manifest[env_flags])"),
-                "rustc_flags should contain the literal value before + operator"
+        let expected_rules = vec![
+            Rule::RustLibrary(RustLibrary {
+                name: "with_select".to_string(),
+                srcs: Set::from(["src/lib.rs".to_string()]),
+                crate_name: "with_select".to_string(),
+                crate_root: "src/lib.rs".to_string(),
+                edition: "2024".to_string(),
+                rustc_flags: Set::from(["@$(location :manifest[env_flags])".to_string()]),
+                visibility: Set::from(["PUBLIC".to_string()]),
+                ..Default::default()
+            }),
+            Rule::RustLibrary(RustLibrary {
+                name: "with_select_reversed".to_string(),
+                srcs: Set::from(["src/lib.rs".to_string()]),
+                crate_name: "with_select_reversed".to_string(),
+                crate_root: "src/lib.rs".to_string(),
+                edition: "2024".to_string(),
+                rustc_flags: Set::from(["@$(location :manifest[env_flags])".to_string()]),
+                visibility: Set::from(["PUBLIC".to_string()]),
+                ..Default::default()
+            }),
+            Rule::RustLibrary(RustLibrary {
+                name: "merge_both_sides".to_string(),
+                srcs: Set::from(["src/lib.rs".to_string()]),
+                crate_name: "merge_both_sides".to_string(),
+                crate_root: "src/lib.rs".to_string(),
+                edition: "2024".to_string(),
+                rustc_flags: Set::from([
+                    "@$(location //third-party/rust/crates/windows:build-script-run[rustc_flags])"
+                        .to_string(),
+                    "@$(location :manifest[env_flags])".to_string(),
+                ]),
+                visibility: Set::from(["PUBLIC".to_string()]),
+                ..Default::default()
+            }),
+        ];
+
+        assert_eq!(
+            rules.len(),
+            expected_rules.len(),
+            "workspace BUCK should produce expected rule count"
+        );
+
+        for expected in expected_rules {
+            let key = rule_map_key(&expected);
+            let actual = rules
+                .get(&key)
+                .unwrap_or_else(|| panic!("rule with key '{}' should be present", key));
+            assert_eq!(
+                actual, &expected,
+                "rule with key '{}' should match expected",
+                key
             );
-        } else {
-            panic!("expected RustLibrary rule");
-        }
-
-        let rule = rules
-            .get("rust_library[with_select_reversed]")
-            .expect("rust_library rule should be present");
-
-        if let Rule::RustLibrary(lib) = rule {
-            assert!(
-                lib.rustc_flags
-                    .contains("@$(location :manifest[env_flags])"),
-                "rustc_flags should contain the literal value after + operator"
-            );
-        } else {
-            panic!("expected RustLibrary rule");
         }
     }
 }
