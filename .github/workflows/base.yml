@@ -49,6 +49,7 @@ jobs:
 
   test:
     name: Unit Tests
+
     runs-on: ubuntu-latest
 
     steps:
@@ -66,3 +67,34 @@ jobs:
 
       - name: Run unit tests
         run: cargo test
+
+  integration-test:
+    name: Integration Tests (DAG)
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Setup Rust Toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-workspaces: .
+          cache-directories: ./target
+
+      - name: Clone test repos
+        run: |
+          mkdir -p /tmp/buckal-test
+          git clone https://github.com/yueneiqi/first-party-demo.git /tmp/buckal-test/first-party-demo
+          cd /tmp/buckal-test/first-party-demo && git checkout 47212754b6cb83eead26a8ca295d3475c6c6d2fa
+          git clone https://github.com/yueneiqi/monorepo-demo.git /tmp/buckal-test/monorepo-demo
+          cd /tmp/buckal-test/monorepo-demo && git checkout 4fb605ba118df83a5f56a81db9296dcab88ecb73
+          git clone https://github.com/sharkdp/fd.git /tmp/buckal-test/fd
+          cd /tmp/buckal-test/fd && git checkout b691572928bf4a589c1f195c79037fdd2d2b6f07
+
+      - name: Run integration tests
+        run: cargo test -- --ignored test_dag
