@@ -168,7 +168,7 @@ jobs:
           fi
 
       - name: Upload generated tree
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.project_name }}-gen-${{ matrix.name }}
           path: ${{ inputs.project_dir || inputs.project_name || 'cargo-buckal' }}
