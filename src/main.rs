@@ -8,6 +8,7 @@ mod cli;
 mod commands;
 mod config;
 mod context;
+mod filter;
 mod platform;
 mod registry;
 mod utils;
