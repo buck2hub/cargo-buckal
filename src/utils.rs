@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -6,8 +5,8 @@ use std::sync::OnceLock;
 use std::{io, process::Command, str::FromStr};
 
 use anyhow::{Result, bail};
+use cargo_metadata::PackageId;
 use cargo_metadata::camino::Utf8PathBuf;
-use cargo_metadata::{MetadataCommand, PackageId};
 use cargo_platform::Cfg;
 use cargo_util_schemas::core::{PackageIdSpec, SourceKind};
 use colored::Colorize;
@@ -486,20 +485,18 @@ pub fn get_vendor_dir(package_id: &PackageId) -> Result<Utf8PathBuf> {
     Ok(get_buck2_root()?.join(get_vendor_path_relative(package_id)?))
 }
 
-/// Retrieve the last saved BuckalCache from the cache file, or create a new one if the cache file does not exist.
+/// Retrieve the last saved BuckalCache from the cache file, or rebuild from metadata if unavailable.
 pub fn get_last_cache() -> BuckalCache {
-    if let Ok(last_cache) = BuckalCache::load() {
-        last_cache
-    } else {
-        let cargo_metadata = MetadataCommand::new().exec().unwrap_or_exit();
-        let resolve = cargo_metadata.resolve.unwrap();
-        let nodes_map = resolve
-            .nodes
-            .into_iter()
-            .map(|n| (n.id.to_owned(), n))
-            .collect::<HashMap<_, _>>();
-        BuckalCache::new(&nodes_map, &cargo_metadata.workspace_root)
-    }
+    // If the cache file loads successfully, use it.
+    // Otherwise, rebuild from current metadata so that diff() can
+    // detect removals (not just additions).
+    BuckalCache::load().unwrap_or_else(|_| {
+        if get_buck2_root().is_err() {
+            return BuckalCache::new_empty();
+        }
+        let ctx = crate::context::BuckalContext::new(None);
+        BuckalCache::from_resolve(&ctx.resolve, &ctx.workspace_root)
+    })
 }
 
 pub fn section(title: &str) {
@@ -578,25 +575,6 @@ impl<T, E: std::fmt::Display> UnwrapOrExit<T> for Result<T, E> {
                 std::process::exit(1);
             }
         }
-    }
-}
-
-/// Get the file path from a URL on Unix platforms (straightforward)
-#[cfg(unix)]
-pub fn get_url_path(url: &url::Url) -> String {
-    url.path().to_owned()
-}
-
-/// Get the file path from a URL on non-Unix platforms, handling drive letters and backslashes
-///
-/// On Windows, Cargo may produce file URLs that look like `file:///C:/path/to/file`, which includes a leading slash before the drive letter. We need to trim that leading slash and convert forward slashes to backslashes to get a valid Windows path.
-#[cfg(not(unix))]
-pub fn get_url_path(url: &url::Url) -> String {
-    let path = url.path();
-    if path.starts_with('/') && path.chars().nth(2) == Some(':') {
-        path[1..].replace('/', "\\").to_owned()
-    } else {
-        path.to_owned()
     }
 }
 

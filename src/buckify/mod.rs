@@ -1,5 +1,5 @@
 mod actions;
-mod cross;
+pub mod cross;
 mod deps;
 mod emit;
 mod rules;

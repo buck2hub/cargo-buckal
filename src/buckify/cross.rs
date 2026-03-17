@@ -6,7 +6,7 @@ use starlark_syntax::syntax::{AstModule, Dialect};
 const CROSS_SELECT_EXPR: &str =
     "select({\"//platforms:cross\": [\"config//:none\"], \"DEFAULT\": []})";
 
-pub(super) fn patch_rust_test_target_compatible_with(buck_content: String) -> String {
+pub fn patch_rust_test_target_compatible_with(buck_content: String) -> String {
     let ast = match AstModule::parse("BUCK", buck_content.clone(), &Dialect::Extended) {
         Ok(ast) => ast,
         Err(_) => return buck_content,

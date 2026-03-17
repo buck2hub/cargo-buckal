@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::BTreeSet as Set};
 
-use cargo_metadata::{Node, Package, Target, camino::Utf8PathBuf};
+use cargo_metadata::{TargetKind, camino::Utf8PathBuf};
 use cargo_util_schemas::lockfile::TomlLockfileSourceId;
 
 use crate::{
@@ -11,6 +11,7 @@ use crate::{
     buckify::actions::is_third_party,
     context::BuckalContext,
     platform::{buck_labels, lookup_platforms},
+    resolve::{BuckalNode, BuckalTarget},
     utils::{UnwrapOrExit, get_buck2_root, get_cfgs, get_target, get_vendor_path_relative},
 };
 
@@ -18,9 +19,8 @@ use super::deps::{dep_kind_matches, set_deps};
 
 /// Emit `rust_library` rule for the given lib target
 pub(super) fn emit_rust_library(
-    package: &Package,
-    node: &Node,
-    lib_target: &Target,
+    node: &BuckalNode,
+    lib_target: &BuckalTarget,
     manifest_dir: &Utf8PathBuf,
     buckal_name: &str,
     ctx: &BuckalContext,
@@ -29,17 +29,14 @@ pub(super) fn emit_rust_library(
         name: buckal_name.to_owned(),
         srcs: Set::from([get_vendor_target()]),
         crate_name: lib_target.name.to_owned().replace("-", "_"),
-        edition: package.edition.to_string(),
+        edition: node.edition.to_string(),
         features: Set::from_iter(node.features.iter().map(|f| f.to_string())),
         rustc_flags: Set::from(["@$(location :manifest[env_flags])".to_owned()]),
         visibility: Set::from(["PUBLIC".to_owned()]),
         ..Default::default()
     };
 
-    if lib_target
-        .kind
-        .contains(&cargo_metadata::TargetKind::ProcMacro)
-    {
+    if lib_target.kind.contains(&TargetKind::ProcMacro) {
         rust_library.proc_macro = Some(true);
     }
 
@@ -58,7 +55,7 @@ pub(super) fn emit_rust_library(
     );
 
     // look up platform compatibility
-    if let Some(platforms) = lookup_platforms(&package.name) {
+    if let Some(platforms) = lookup_platforms(&node.name) {
         rust_library.compatible_with = buck_labels(&platforms);
     }
 
@@ -71,9 +68,8 @@ pub(super) fn emit_rust_library(
 
 /// Emit `rust_binary` rule for the given bin target
 pub(super) fn emit_rust_binary(
-    package: &Package,
-    node: &Node,
-    bin_target: &Target,
+    node: &BuckalNode,
+    bin_target: &BuckalTarget,
     manifest_dir: &Utf8PathBuf,
     buckal_name: &str,
     ctx: &BuckalContext,
@@ -82,7 +78,7 @@ pub(super) fn emit_rust_binary(
         name: buckal_name.to_owned(),
         srcs: Set::from([get_vendor_target()]),
         crate_name: bin_target.name.to_owned().replace("-", "_"),
-        edition: package.edition.to_string(),
+        edition: node.edition.to_string(),
         features: Set::from_iter(node.features.iter().map(|f| f.to_string())),
         rustc_flags: Set::from(["@$(location :manifest[env_flags])".to_owned()]),
         visibility: Set::from(["PUBLIC".to_owned()]),
@@ -107,7 +103,7 @@ pub(super) fn emit_rust_binary(
     set_deps(&mut rust_binary, node, CargoTargetKind::Bin, ctx)
         .unwrap_or_exit_ctx(format!("failed to set dependencies for '{}'", buckal_name));
 
-    if let Some(platforms) = lookup_platforms(&package.name) {
+    if let Some(platforms) = lookup_platforms(&node.name) {
         rust_binary.compatible_with = buck_labels(&platforms);
     }
 
@@ -116,9 +112,8 @@ pub(super) fn emit_rust_binary(
 
 /// Emit `rust_test` rule for the given bin target
 pub(super) fn emit_rust_test(
-    package: &Package,
-    node: &Node,
-    test_target: &Target,
+    node: &BuckalNode,
+    test_target: &BuckalTarget,
     manifest_dir: &Utf8PathBuf,
     buckal_name: &str,
     ctx: &BuckalContext,
@@ -127,7 +122,7 @@ pub(super) fn emit_rust_test(
         name: buckal_name.to_owned(),
         srcs: Set::from([get_vendor_target()]),
         crate_name: test_target.name.to_owned().replace("-", "_"),
-        edition: package.edition.to_string(),
+        edition: node.edition.to_string(),
         features: Set::from_iter(node.features.iter().map(|f| f.to_string())),
         rustc_flags: Set::from(["@$(location :manifest[env_flags])".to_owned()]),
         visibility: Set::from(["PUBLIC".to_owned()]),
@@ -152,7 +147,7 @@ pub(super) fn emit_rust_test(
     set_deps(&mut rust_test, node, CargoTargetKind::Test, ctx)
         .unwrap_or_exit_ctx(format!("failed to set dependencies for '{}'", buckal_name));
 
-    if let Some(platforms) = lookup_platforms(&package.name) {
+    if let Some(platforms) = lookup_platforms(&node.name) {
         rust_test.compatible_with = buck_labels(&platforms);
     }
 
@@ -161,9 +156,8 @@ pub(super) fn emit_rust_test(
 
 /// Emit `buildscript_build` rule for the given build target
 pub(super) fn emit_buildscript_build(
-    build_target: &Target,
-    package: &Package,
-    node: &Node,
+    build_target: &BuckalTarget,
+    node: &BuckalNode,
     manifest_dir: &Utf8PathBuf,
     ctx: &BuckalContext,
 ) -> RustBinary {
@@ -172,7 +166,7 @@ pub(super) fn emit_buildscript_build(
         name: build_target.name.to_owned(),
         srcs: Set::from([get_vendor_target()]),
         crate_name: build_target.name.to_owned().replace("-", "_"),
-        edition: package.edition.to_string(),
+        edition: node.edition.to_string(),
         features: Set::from_iter(node.features.iter().map(|f| f.to_string())),
         rustc_flags: Set::from(["@$(location :manifest[env_flags])".to_owned()]),
         ..Default::default()
@@ -209,20 +203,19 @@ pub(super) fn emit_buildscript_build(
 
 /// Emit `buildscript_run` rule for the given build target
 pub(super) fn emit_buildscript_run(
-    package: &Package,
-    node: &Node,
-    build_target: &Target,
+    node: &BuckalNode,
+    build_target: &BuckalTarget,
     ctx: &BuckalContext,
 ) -> BuildscriptRun {
     // create the build script run rule
     let build_name = get_build_name(&build_target.name);
     let mut buildscript_run = BuildscriptRun {
         name: format!("{}-run", build_name),
-        package_name: package.name.to_string(),
+        package_name: node.name.to_string(),
         buildscript_rule: format!(":{}", build_target.name),
         env_srcs: Set::from([":manifest[env_dict]".to_owned()]),
         features: Set::from_iter(node.features.iter().map(|f| f.to_string())),
-        version: package.version.to_string(),
+        version: node.version.to_string(),
         manifest_dir: get_vendor_target(),
         visibility: Set::from(["PUBLIC".to_owned()]),
         ..Default::default()
@@ -231,11 +224,11 @@ pub(super) fn emit_buildscript_run(
     let host_target = get_target();
     let host_cfgs = get_cfgs();
 
-    // Set environment variables from dependencies
+    // Set environment variables from dependencies that have the `links` manifest key.
     // See https://doc.rust-lang.org/cargo/reference/build-scripts.html#the-links-manifest-key
     for dep in &node.deps {
-        if let Some(dep_package) = ctx.packages_map.get(&dep.pkg)
-            && dep_package.links.is_some()
+        if let Some(dep_node) = ctx.resolve.get(&dep.pkg)
+            && dep_node.links.is_some()
             && dep.dep_kinds.iter().any(|dk| {
                 dep_kind_matches(CargoTargetKind::Lib, dk.kind)
                     && dk
@@ -245,21 +238,21 @@ pub(super) fn emit_buildscript_run(
                         .unwrap_or(true)
             })
         {
-            // Only normal dependencies with The links Manifest Key for current arch are considered
-            let custom_build_target_dep = dep_package
+            // Only normal dependencies with the links manifest key for current arch are considered
+            let custom_build_target_dep = dep_node
                 .targets
                 .iter()
-                .find(|t| t.kind.contains(&cargo_metadata::TargetKind::CustomBuild));
+                .find(|t| t.kind.contains(&TargetKind::CustomBuild));
             if let Some(build_target_dep) = custom_build_target_dep {
                 let build_name_dep = get_build_name(&build_target_dep.name);
                 buildscript_run.env_srcs.insert(format!(
                     "//{}:{build_name_dep}-run[metadata]",
-                    get_vendor_path_relative(&dep_package.id).unwrap_or_exit()
+                    get_vendor_path_relative(&dep_node.package_id).unwrap_or_exit()
                 ));
             } else {
                 panic!(
                     "Dependency {} has links key but no build script target",
-                    dep_package.name
+                    dep_node.name
                 );
             }
         }
@@ -269,7 +262,7 @@ pub(super) fn emit_buildscript_run(
 }
 
 /// Patch the given `rust_library` or `rust_binary` rule to support build scripts
-pub(super) fn patch_with_buildscript(rust_rule: &mut dyn RustRule, build_target: &Target) {
+pub(super) fn patch_with_buildscript(rust_rule: &mut dyn RustRule, build_target: &BuckalTarget) {
     let build_name = get_build_name(&build_target.name);
     rust_rule.env_mut().insert(
         "OUT_DIR".to_owned(),
@@ -281,16 +274,16 @@ pub(super) fn patch_with_buildscript(rust_rule: &mut dyn RustRule, build_target:
 }
 
 /// Emit `http_archive` rule for the given package
-pub(super) fn emit_http_archive(package: &Package, ctx: &BuckalContext) -> HttpArchive {
+pub(super) fn emit_http_archive(node: &BuckalNode) -> HttpArchive {
     let url = format!(
         "https://static.crates.io/crates/{}/{}-{}.crate",
-        package.name, package.name, package.version
+        node.name, node.name, node.version
     );
-    let buckal_name = format!("{}-{}", package.name, package.version);
-    let checksum = ctx
-        .checksums_map
-        .get(&format!("{}-{}", package.name, package.version))
-        .unwrap();
+    let buckal_name = format!("{}-{}", node.name, node.version);
+    let checksum = node
+        .checksum
+        .as_ref()
+        .expect("missing checksum for registry package");
 
     HttpArchive {
         name: get_vendor_name().to_string(),
@@ -315,16 +308,9 @@ pub(super) fn emit_filegroup() -> FileGroup {
 }
 
 /// Emit `git_fetch` rule for the given package
-pub(super) fn emit_git_fetch(package: &Package) -> GitFetch {
-    let source_id = TomlLockfileSourceId::new(
-        package
-            .source
-            .as_ref()
-            .expect("failed to get package source")
-            .repr
-            .to_owned(),
-    )
-    .unwrap_or_exit();
+pub(super) fn emit_git_fetch(node: &BuckalNode) -> GitFetch {
+    let source_repr = node.source.as_ref().expect("failed to get package source");
+    let source_id = TomlLockfileSourceId::new(source_repr.to_owned()).unwrap_or_exit();
 
     let mut git_repo = source_id.url().to_owned();
     git_repo.set_fragment(None);
@@ -338,8 +324,8 @@ pub(super) fn emit_git_fetch(package: &Package) -> GitFetch {
 }
 
 /// Emit `cargo_manifest` rule for the given package
-pub(super) fn emit_cargo_manifest(package: &Package, ctx: &BuckalContext) -> CargoManifest {
-    if !is_third_party(package) && ctx.workspace_inherit {
+pub(super) fn emit_cargo_manifest(node: &BuckalNode, ctx: &BuckalContext) -> CargoManifest {
+    if !is_third_party(node) && ctx.workspace_inherit {
         let buck2_root = get_buck2_root().unwrap_or_exit_ctx("failed to get Buck2 root");
         let workspace_root = ctx.workspace_root.to_owned();
         let relative_path = workspace_root

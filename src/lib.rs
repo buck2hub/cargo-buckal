@@ -11,6 +11,7 @@ pub mod context;
 pub mod filter;
 pub mod platform;
 pub mod registry;
+pub mod resolve;
 pub mod utils;
 
 use std::sync::OnceLock;

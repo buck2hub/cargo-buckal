@@ -1,5 +1,4 @@
-use cargo_metadata::{Package, camino::Utf8Path};
-use cargo_util_schemas::core::PackageIdSpec;
+use cargo_metadata::camino::Utf8Path;
 use regex::Regex;
 
 use crate::{
@@ -8,7 +7,8 @@ use crate::{
     buckify::emit::emit_export_file,
     cache::{BuckalChange, ChangeType},
     context::BuckalContext,
-    utils::{UnwrapOrExit, get_buck2_root, get_url_path, get_vendor_dir},
+    resolve::{BuckalNode, NodeKind},
+    utils::{UnwrapOrExit, get_vendor_dir},
 };
 
 use super::{
@@ -27,25 +27,23 @@ impl BuckalChange {
         for (id, change_type) in &self.changes {
             match change_type {
                 ChangeType::Added | ChangeType::Changed => {
-                    if let Some(node) = ctx.nodes_map.get(id) {
-                        let package = ctx.packages_map.get(id).unwrap();
-
+                    if let Some(node) = ctx.resolve.nodes().find(|n| &n.package_id == id) {
                         buckal_log!(
                             if let ChangeType::Added = change_type {
                                 "Adding"
                             } else {
                                 "Flushing"
                             },
-                            format!("{} v{}", package.name, package.version)
+                            format!("{} v{}", node.name, node.version)
                         );
 
-                        let is_third_party_pkg = is_third_party(package);
+                        let is_third_party_pkg = is_third_party(node);
 
                         // Vendor package sources
                         let vendor_dir = if !is_third_party_pkg {
-                            package.manifest_path.parent().unwrap().to_owned()
+                            node.manifest_path.parent().unwrap().to_owned()
                         } else {
-                            vendor_package(package)
+                            vendor_package(node)
                         };
 
                         // Generate BUCK rules
@@ -59,7 +57,7 @@ impl BuckalChange {
                         let workspace_manifest_path = ctx.workspace_root.join("Cargo.toml");
                         if ctx.workspace_inherit
                             && !workspace_emitted
-                            && package.manifest_path == workspace_manifest_path
+                            && node.manifest_path == workspace_manifest_path
                         {
                             buck_rules.push(Rule::ExportFile(emit_export_file()));
                             workspace_emitted = true;
@@ -73,7 +71,7 @@ impl BuckalChange {
                         let mut buck_content = gen_buck_content(&buck_rules);
                         if !is_third_party_pkg {
                             buck_content =
-                                windows::patch_root_windows_rustc_flags(buck_content, ctx, package);
+                                windows::patch_root_windows_rustc_flags(buck_content, ctx, node);
                         }
                         buck_content = cross::patch_rust_test_target_compatible_with(buck_content);
                         std::fs::write(&buck_path, buck_content)
@@ -130,22 +128,9 @@ impl BuckalChange {
     }
 }
 
-/// Check if a package is a third-party dependency
-pub(super) fn is_third_party(package: &Package) -> bool {
-    if package.source.is_some() {
-        true
-    } else {
-        let package_id_spec =
-            PackageIdSpec::parse(&package.id.repr).unwrap_or_exit_ctx("failed to parse package ID");
-        let buck2_root = get_buck2_root().unwrap_or_exit_ctx("failed to get Buck2 root");
-        if let Some(url) = package_id_spec.url() {
-            let url_path = get_url_path(url);
-            url_path.strip_prefix(buck2_root.as_str()).is_none()
-        } else {
-            // If there's no URL, we treat it as a first-party package
-            false
-        }
-    }
+/// Check if a node represents a third-party dependency
+pub(super) fn is_third_party(node: &BuckalNode) -> bool {
+    matches!(node.kind, NodeKind::ThirdParty)
 }
 
 /// Merge existing BUCK rules with new ones, preserving manual changes in specified fields.

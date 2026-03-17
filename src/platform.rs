@@ -74,7 +74,7 @@ static CFG_CACHE: OnceLock<HashMap<&'static str, Vec<Cfg>>> = OnceLock::new();
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// let cfgs = get_rustc_cfgs_for_triple("x86_64-unknown-linux-gnu");
 /// if let Some(cfg_values) = cfgs {
 ///     // Use cfg_values for platform matching
