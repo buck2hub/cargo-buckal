@@ -1,0 +1,3 @@
+[workspace]
+members = ["uses-itoa-loose", "uses-itoa-pinned", "compat-root"]
+resolver = "2"

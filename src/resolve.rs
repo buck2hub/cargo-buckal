@@ -239,3 +239,273 @@ impl BuckalResolve {
         self.dag.raw_nodes().iter().map(|n| &n.weight)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_pkg_id(name: &str) -> PackageId {
+        PackageId {
+            repr: format!(
+                "registry+https://github.com/rust-lang/crates.io-index#{}@1.0.0",
+                name
+            ),
+        }
+    }
+
+    fn make_pkg_id_versioned(name: &str, version: &str) -> PackageId {
+        PackageId {
+            repr: format!(
+                "registry+https://github.com/rust-lang/crates.io-index#{}@{}",
+                name, version
+            ),
+        }
+    }
+
+    fn make_node(name: &str, version: &str, dep_pkg_ids: Vec<PackageId>) -> BuckalNode {
+        let deps = dep_pkg_ids
+            .into_iter()
+            .map(|pkg| BuckalDep {
+                name: pkg
+                    .repr
+                    .rsplit('#')
+                    .next()
+                    .unwrap()
+                    .split('@')
+                    .next()
+                    .unwrap()
+                    .to_string(),
+                pkg,
+                dep_kinds: vec![BuckalDepKind {
+                    kind: DependencyKind::Normal,
+                    target: None,
+                }],
+            })
+            .collect();
+        BuckalNode {
+            package_id: make_pkg_id(name),
+            name: name.to_string(),
+            version: version.to_string(),
+            features: vec![],
+            kind: NodeKind::ThirdParty,
+            edition: Edition::E2021,
+            deps,
+            manifest_path: Utf8PathBuf::from(format!("/tmp/{}/Cargo.toml", name)),
+            targets: vec![],
+            source: Some("registry+https://github.com/rust-lang/crates.io-index".to_string()),
+            links: None,
+            checksum: None,
+        }
+    }
+
+    #[test]
+    fn test_three_node_chain() {
+        let mut dag = Dag::<BuckalNode, (), u32>::new();
+        let mut index_map = HashMap::new();
+
+        let node_a = make_node("a", "1.0.0", vec![make_pkg_id("b")]);
+        let node_b = make_node("b", "1.0.0", vec![make_pkg_id("c")]);
+        let node_c = make_node("c", "1.0.0", vec![]);
+
+        let idx_a = dag.add_node(node_a.clone());
+        let idx_b = dag.add_node(node_b.clone());
+        let idx_c = dag.add_node(node_c.clone());
+
+        index_map.insert(node_a.package_id.clone(), idx_a);
+        index_map.insert(node_b.package_id.clone(), idx_b);
+        index_map.insert(node_c.package_id.clone(), idx_c);
+
+        dag.add_edge(idx_a, idx_b, ()).unwrap();
+        dag.add_edge(idx_b, idx_c, ()).unwrap();
+
+        let resolve = BuckalResolve { dag, index_map };
+
+        // B's dependents should be [A]
+        let b_dependents = resolve.dependents(&make_pkg_id("b"));
+        assert_eq!(b_dependents.len(), 1);
+        assert_eq!(b_dependents[0].name, "a");
+
+        // A's dependencies should be [B]
+        let a_deps = resolve.dependencies(&make_pkg_id("a"));
+        assert_eq!(a_deps.len(), 1);
+        assert_eq!(a_deps[0].name, "b");
+
+        // C has no dependents besides B
+        let c_dependents = resolve.dependents(&make_pkg_id("c"));
+        assert_eq!(c_dependents.len(), 1);
+        assert_eq!(c_dependents[0].name, "b");
+    }
+
+    #[test]
+    fn test_first_party_relative_path() {
+        let mut node = make_node("my-crate", "0.1.0", vec![]);
+        node.package_id = make_pkg_id("my-crate");
+        node.kind = NodeKind::FirstParty {
+            relative_path: "crates/my-crate".to_string(),
+        };
+        node.source = None;
+
+        match &node.kind {
+            NodeKind::FirstParty { relative_path } => {
+                assert_eq!(relative_path, "crates/my-crate");
+            }
+            _ => panic!("expected FirstParty"),
+        }
+    }
+
+    #[test]
+    fn test_find_by_name() {
+        let mut dag = Dag::<BuckalNode, (), u32>::new();
+        let mut index_map = HashMap::new();
+
+        let node_a = make_node("serde", "1.0.0", vec![]);
+        let node_b = make_node("tokio", "1.0.0", vec![]);
+
+        let idx_a = dag.add_node(node_a.clone());
+        let idx_b = dag.add_node(node_b.clone());
+
+        index_map.insert(node_a.package_id.clone(), idx_a);
+        index_map.insert(node_b.package_id.clone(), idx_b);
+
+        let resolve = BuckalResolve { dag, index_map };
+
+        assert!(resolve.find_by_name("serde", None).is_some());
+        assert!(resolve.find_by_name("serde", Some("1.0.0")).is_some());
+        assert!(resolve.find_by_name("serde", Some("2.0.0")).is_none());
+        assert!(resolve.find_by_name("nonexistent", None).is_none());
+    }
+
+    #[test]
+    fn test_fingerprint_stability_and_sensitivity() {
+        let node1 = make_node("foo", "1.0.0", vec![]);
+        let node2 = make_node("foo", "1.0.0", vec![]);
+        let node3 = make_node("foo", "1.1.0", vec![]);
+
+        // Same data -> same fingerprint
+        assert_eq!(node1.fingerprint(), node2.fingerprint());
+
+        // Different version -> different fingerprint
+        assert_ne!(node1.fingerprint(), node3.fingerprint());
+    }
+
+    /// Diamond dependency with version conflict:
+    ///
+    ///     root
+    ///    /    \
+    /// dep_a  dep_b
+    ///    \    /
+    ///   common  (v1.0.0 via dep_a, v2.0.0 via dep_b)
+    ///
+    /// Both versions of `common` must exist as separate nodes in the DAG.
+    #[test]
+    fn test_diamond_dependency_version_conflict() {
+        let mut dag = Dag::<BuckalNode, (), u32>::new();
+        let mut index_map = HashMap::new();
+
+        let common_v1_id = make_pkg_id_versioned("common", "1.0.0");
+        let common_v2_id = make_pkg_id_versioned("common", "2.0.0");
+
+        let root = {
+            let mut n = make_node(
+                "root",
+                "0.1.0",
+                vec![make_pkg_id("dep-a"), make_pkg_id("dep-b")],
+            );
+            n.kind = NodeKind::FirstParty {
+                relative_path: "".to_string(),
+            };
+            n.source = None;
+            n
+        };
+
+        let dep_a = make_node("dep-a", "1.0.0", vec![common_v1_id.clone()]);
+        let dep_b = make_node("dep-b", "1.0.0", vec![common_v2_id.clone()]);
+
+        let common_v1 = {
+            let mut n = make_node("common", "1.0.0", vec![]);
+            n.package_id = common_v1_id.clone();
+            n
+        };
+
+        let common_v2 = {
+            let mut n = make_node("common", "2.0.0", vec![]);
+            n.package_id = common_v2_id.clone();
+            n
+        };
+
+        let idx_root = dag.add_node(root.clone());
+        let idx_a = dag.add_node(dep_a.clone());
+        let idx_b = dag.add_node(dep_b.clone());
+        let idx_cv1 = dag.add_node(common_v1.clone());
+        let idx_cv2 = dag.add_node(common_v2.clone());
+
+        index_map.insert(root.package_id.clone(), idx_root);
+        index_map.insert(dep_a.package_id.clone(), idx_a);
+        index_map.insert(dep_b.package_id.clone(), idx_b);
+        index_map.insert(common_v1_id.clone(), idx_cv1);
+        index_map.insert(common_v2_id.clone(), idx_cv2);
+
+        dag.add_edge(idx_root, idx_a, ()).unwrap();
+        dag.add_edge(idx_root, idx_b, ()).unwrap();
+        dag.add_edge(idx_a, idx_cv1, ()).unwrap();
+        dag.add_edge(idx_b, idx_cv2, ()).unwrap();
+
+        let resolve = BuckalResolve { dag, index_map };
+
+        // Total: root + dep_a + dep_b + common@1.0 + common@2.0 = 5 nodes
+        assert_eq!(resolve.nodes().count(), 5);
+
+        // Both versions of common exist as separate nodes
+        assert!(resolve.find_by_name("common", Some("1.0.0")).is_some());
+        assert!(resolve.find_by_name("common", Some("2.0.0")).is_some());
+
+        // find_by_name without version returns one (non-deterministic which)
+        assert!(resolve.find_by_name("common", None).is_some());
+
+        // Count nodes named "common" — should be exactly 2
+        let common_nodes: Vec<&BuckalNode> =
+            resolve.nodes().filter(|n| n.name == "common").collect();
+        assert_eq!(
+            common_nodes.len(),
+            2,
+            "expected 2 nodes named 'common', got {}",
+            common_nodes.len()
+        );
+
+        // dep_a depends on common@1.0.0 only
+        let a_deps = resolve.dependencies(&make_pkg_id("dep-a"));
+        assert_eq!(a_deps.len(), 1);
+        assert_eq!(a_deps[0].name, "common");
+        assert_eq!(a_deps[0].version, "1.0.0");
+
+        // dep_b depends on common@2.0.0 only
+        let b_deps = resolve.dependencies(&make_pkg_id("dep-b"));
+        assert_eq!(b_deps.len(), 1);
+        assert_eq!(b_deps[0].name, "common");
+        assert_eq!(b_deps[0].version, "2.0.0");
+
+        // common@1.0.0 dependents should be [dep_a] only
+        let cv1_dependents = resolve.dependents(&common_v1_id);
+        assert_eq!(cv1_dependents.len(), 1);
+        assert_eq!(cv1_dependents[0].name, "dep-a");
+
+        // common@2.0.0 dependents should be [dep_b] only
+        let cv2_dependents = resolve.dependents(&common_v2_id);
+        assert_eq!(cv2_dependents.len(), 1);
+        assert_eq!(cv2_dependents[0].name, "dep-b");
+
+        // root depends on both dep_a and dep_b
+        let root_deps = resolve.dependencies(&make_pkg_id("root"));
+        assert_eq!(root_deps.len(), 2);
+        let root_dep_names: Vec<&str> = root_deps.iter().map(|n| n.name.as_str()).collect();
+        assert!(root_dep_names.contains(&"dep-a"));
+        assert!(root_dep_names.contains(&"dep-b"));
+
+        // Fingerprints of common@1.0.0 and common@2.0.0 must differ
+        assert_ne!(
+            common_v1.fingerprint(),
+            common_v2.fingerprint(),
+            "different versions should produce different fingerprints"
+        );
+    }
+}

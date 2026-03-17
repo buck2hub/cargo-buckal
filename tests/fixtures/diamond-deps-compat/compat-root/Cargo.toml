@@ -1,0 +1,8 @@
+[package]
+name = "compat-root"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+uses-itoa-loose = { path = "../uses-itoa-loose" }
+uses-itoa-pinned = { path = "../uses-itoa-pinned" }

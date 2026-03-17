@@ -147,3 +147,119 @@ fn merge_rules(buck_path: &Utf8Path, buck_rules: &mut [Rule], ctx: &BuckalContex
             .unwrap_or_exit_ctx(format!("Failed to create {}", buck_path));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashMap};
+
+    use cargo_metadata::{PackageId, camino::Utf8PathBuf};
+    use daggy::Dag;
+
+    use crate::{
+        cache::{BuckalChange, ChangeType},
+        config::RepoConfig,
+        context::BuckalContext,
+        resolve::{BuckalNode, BuckalResolve, BuckalTarget, NodeKind},
+    };
+
+    use cargo_metadata::Edition;
+    use cargo_metadata::TargetKind;
+
+    fn mock_target(name: &str, kind: TargetKind, src_path: Utf8PathBuf) -> BuckalTarget {
+        BuckalTarget {
+            name: name.to_string(),
+            kind: vec![kind],
+            src_path,
+            doctest: true,
+            test: true,
+        }
+    }
+
+    fn mock_first_party_node(
+        name: &str,
+        manifest_path: Utf8PathBuf,
+        targets: Vec<BuckalTarget>,
+    ) -> BuckalNode {
+        BuckalNode {
+            package_id: PackageId {
+                repr: format!("path+file://{name}#0.1.0"),
+            },
+            name: name.to_string(),
+            version: "0.1.0".to_string(),
+            features: vec![],
+            kind: NodeKind::FirstParty {
+                relative_path: "".to_string(),
+            },
+            edition: Edition::E2021,
+            deps: vec![],
+            manifest_path,
+            targets,
+            source: None,
+            links: None,
+            checksum: None,
+        }
+    }
+
+    #[test]
+    fn test_apply_generates_root_buck_file() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let tmp_path =
+            Utf8PathBuf::try_from(tmp.path().to_path_buf()).expect("temp dir is not valid UTF-8");
+
+        let manifest_path = tmp_path.join("Cargo.toml");
+        std::fs::write(
+            &manifest_path,
+            "[package]\nname = \"myroot\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("write Cargo.toml");
+
+        // Create a src/lib.rs so the target src_path exists
+        let src_dir = tmp_path.join("src");
+        std::fs::create_dir_all(&src_dir).expect("create src dir");
+        std::fs::write(src_dir.join("lib.rs"), "").expect("write lib.rs");
+
+        let lib_target = mock_target("myroot", TargetKind::Lib, tmp_path.join("src/lib.rs"));
+        let node = mock_first_party_node("myroot", manifest_path, vec![lib_target]);
+        let package_id = node.package_id.clone();
+
+        // Build a BuckalResolve with the node in the DAG
+        let mut dag = Dag::new();
+        let idx = dag.add_node(node);
+        let mut index_map = HashMap::new();
+        index_map.insert(package_id.clone(), idx);
+        let resolve = BuckalResolve { dag, index_map };
+
+        // BuckalChange with Added for our root package
+        let mut changes = BTreeMap::new();
+        changes.insert(package_id.clone(), ChangeType::Added);
+        let change = BuckalChange { changes };
+
+        // BuckalContext with root set to our package (this is the key scenario)
+        let ctx = BuckalContext {
+            root: Some(package_id),
+            resolve,
+            workspace_root: tmp_path.clone(),
+            workspace_inherit: false,
+            no_merge: false,
+            repo_config: RepoConfig::default(),
+        };
+
+        change.apply(&ctx);
+
+        let buck_path = tmp_path.join("BUCK");
+        assert!(
+            buck_path.exists(),
+            "BUCK file should be generated for root package"
+        );
+
+        let content = std::fs::read_to_string(&buck_path).expect("read BUCK file");
+        assert!(
+            content.contains("rust_library"),
+            "BUCK file should contain a rust_library rule, got:\n{content}"
+        );
+        assert!(
+            content.contains("load("),
+            "BUCK file should contain load statements, got:\n{content}"
+        );
+    }
+}

@@ -1,0 +1,3 @@
+[workspace]
+members = ["uses-itoa-old", "uses-itoa-new", "diamond-root"]
+resolver = "2"
