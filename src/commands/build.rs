@@ -2,7 +2,7 @@ use clap::Parser;
 
 use crate::{
     buck2::Buck2Command,
-    buckal_error, buckal_note, buckal_warn,
+    buckal_error, buckal_note,
     filter::{FilterCaller, TargetFilter, get_available_targets},
     utils::{
         UnwrapOrExit, ensure_prerequisites, get_buck2_root, get_target, is_inside_buck2_project,
@@ -86,7 +86,7 @@ pub fn execute(args: &BuildArgs) {
     let cwd = std::env::current_dir().unwrap_or_exit_ctx("failed to get current directory");
     let mut relative = cwd
         .strip_prefix(&buck2_root)
-        .expect("build command should invoke inside inside a Buck2 project.")
+        .unwrap_or_exit_ctx("build command should invoke inside a Buck2 project.")
         .to_string_lossy()
         .into_owned();
 
@@ -106,7 +106,8 @@ pub fn execute(args: &BuildArgs) {
         args.benches,
         args.all_targets,
         FilterCaller::Build,
-    );
+    )
+    .unwrap_or_exit();
 
     let available_targets = get_available_targets(&relative).unwrap_or_exit();
 
@@ -149,9 +150,11 @@ pub fn execute(args: &BuildArgs) {
     }
 
     if !target_specified {
-        buckal_warn!("all targets filtered out, nothing to build");
-        buckal_note!("please check if there are any buildable targets in current directory");
-        return;
+        buckal_error!("all targets filtered out, nothing to build");
+        buckal_note!(
+            "please check the filter arguments and ensure if there are any buildable targets in current directory"
+        );
+        std::process::exit(1);
     }
 
     match buck2_cmd.status() {

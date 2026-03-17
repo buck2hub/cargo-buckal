@@ -1,3 +1,5 @@
+// NOTE: `dead_code` is allowed temporarily for stubs reserved for future development.
+// This attribute should be removed once the implementation is complete.
 #![allow(dead_code)]
 
 use anyhow::bail;
@@ -54,16 +56,16 @@ pub enum TargetFilter {
 }
 
 impl FilterRule {
-    pub fn new(targets: Vec<String>, all: bool) -> FilterRule {
+    pub fn new(targets: Vec<String>, all: bool) -> anyhow::Result<FilterRule> {
         if all {
-            FilterRule::All
+            Ok(FilterRule::All)
         } else {
             let mut builder = GlobSetBuilder::new();
             for target in targets {
-                builder.add(Glob::new(&target).unwrap());
+                builder.add(Glob::new(&target)?);
             }
 
-            FilterRule::Just(builder.build().unwrap())
+            Ok(FilterRule::Just(builder.build()?))
         }
     }
 
@@ -109,28 +111,28 @@ impl TargetFilter {
         all_benches: bool,
         all_targets: bool,
         caller: FilterCaller,
-    ) -> TargetFilter {
+    ) -> anyhow::Result<TargetFilter> {
         if all_targets {
-            return TargetFilter::new_all_targets();
+            return Ok(TargetFilter::new_all_targets());
         }
         let rule_lib = if lib_only {
             LibRule::True
         } else {
             LibRule::False
         };
-        let rule_bins = FilterRule::new(bins, all_bins);
-        let rule_tests = FilterRule::new(tests, all_tests);
-        let rule_examples = FilterRule::new(examples, all_examples);
-        let rule_benches = FilterRule::new(benches, all_benches);
+        let rule_bins = FilterRule::new(bins, all_bins)?;
+        let rule_tests = FilterRule::new(tests, all_tests)?;
+        let rule_examples = FilterRule::new(examples, all_examples)?;
+        let rule_benches = FilterRule::new(benches, all_benches)?;
 
-        TargetFilter::new(
+        Ok(TargetFilter::new(
             rule_lib,
             rule_bins,
             rule_tests,
             rule_examples,
             rule_benches,
             caller,
-        )
+        ))
     }
 
     /// Constructs a filter from underlying primitives.
@@ -174,6 +176,8 @@ impl TargetFilter {
     }
 
     /// Constructs a filter that includes all test targets.
+    ///
+    /// This is different from `TargetFilter::Default(TargetCaller::Test)` in that it doesn't include examples, which are not necessary for testing and may significantly increase the build time.
     pub fn all_test_targets() -> Self {
         Self::Only {
             all_targets: false,
@@ -198,15 +202,15 @@ impl TargetFilter {
     }
 
     /// Constructs a filter that includes the given binary. No more. No less.
-    pub fn single_bin(bin: String) -> Self {
-        Self::Only {
+    pub fn single_bin(bin: String) -> anyhow::Result<Self> {
+        Ok(Self::Only {
             all_targets: false,
             lib: LibRule::False,
-            bins: FilterRule::new(vec![bin], false),
+            bins: FilterRule::new(vec![bin], false)?,
             examples: FilterRule::none(),
             tests: FilterRule::none(),
             benches: FilterRule::none(),
-        }
+        })
     }
 
     /// Selects targets to run.
@@ -322,18 +326,22 @@ pub fn get_available_targets(package: &str) -> anyhow::Result<Vec<BuckTargetEntr
         .arg("--json")
         .output()
     {
-        Ok(output) if output.status.success() => {
-            let targets = serde_json::from_slice::<Vec<BuckTargetEntry>>(&output.stdout)?
-                .into_iter()
-                .filter(|entry| entry.is_rust_rule() && !entry.is_third_party())
-                .collect();
-            Ok(targets)
+        Ok(output) => {
+            if output.status.success() {
+                let targets = serde_json::from_slice::<Vec<BuckTargetEntry>>(&output.stdout)?
+                    .into_iter()
+                    .filter(|entry| entry.is_rust_rule() && !entry.is_third_party())
+                    .collect();
+                Ok(targets)
+            } else {
+                bail!(
+                    "failed to query Buck2 targets: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
         }
-        _ => {
-            bail!(
-                "failed to query Buck2 targets with pattern '{}'",
-                target_pattern
-            );
+        Err(e) => {
+            bail!("failed to execute Buck2 command: {e}");
         }
     }
 }
@@ -407,7 +415,8 @@ mod tests {
 
     #[test]
     fn single_bin_matches_only_given_bin_name() {
-        let filter = TargetFilter::single_bin("my-bin".to_string());
+        let filter = TargetFilter::single_bin("my-bin".to_string())
+            .expect("target filter creation should succeed");
         let wanted_bin = mk_target("prelude//rules.bzl:rust_binary", "my-bin");
         let other_bin = mk_target("prelude//rules.bzl:rust_binary", "other");
         let lib_target = mk_target("prelude//rules.bzl:rust_library", "pkg");
@@ -431,7 +440,8 @@ mod tests {
             false,
             true,
             FilterCaller::Build,
-        );
+        )
+        .expect("target filter creation should succeed");
 
         assert!(filter.is_all_targets());
         let bin_target = mk_target("prelude//rules.bzl:rust_binary", "any-bin");
@@ -456,7 +466,8 @@ mod tests {
             false,
             false,
             FilterCaller::Build,
-        );
+        )
+        .expect("target filter creation should succeed");
 
         assert!(matches!(filter, TargetFilter::Default(_)));
         let bin_target = mk_target("prelude//rules.bzl:rust_binary", "app");
@@ -481,7 +492,8 @@ mod tests {
             false,
             false,
             FilterCaller::Build,
-        );
+        )
+        .expect("target filter creation should succeed");
 
         let lib_target = mk_target("prelude//rules.bzl:rust_library", "pkg");
         let bin_target = mk_target("prelude//rules.bzl:rust_binary", "app");
@@ -503,7 +515,8 @@ mod tests {
             false,
             false,
             FilterCaller::Build,
-        );
+        )
+        .expect("target filter creation should succeed");
 
         let bin_target = mk_target("prelude//rules.bzl:rust_binary", "bin-a");
         let test_target = mk_target("prelude//rules.bzl:rust_test", "tests");
@@ -512,8 +525,30 @@ mod tests {
     }
 
     #[test]
+    fn from_raw_arguments_returns_error_for_invalid_glob() {
+        let err = TargetFilter::from_raw_arguments(
+            false,
+            vec!["invalid[glob".to_string()],
+            false,
+            vec![],
+            false,
+            vec![],
+            false,
+            vec![],
+            false,
+            false,
+            FilterCaller::Build,
+        )
+        .expect_err("target filter creation should fail");
+
+        let msg = err.to_string();
+        assert!(msg.contains("unclosed character class"));
+    }
+
+    #[test]
     fn target_run_returns_false_for_unsupported_kind_in_only_mode() {
-        let filter = TargetFilter::single_bin("app".to_string());
+        let filter = TargetFilter::single_bin("app".to_string())
+            .expect("target filter creation should succeed");
         let unsupported = mk_target("prelude//rules.bzl:filegroup", "assets");
 
         assert!(!filter.target_run(&unsupported));

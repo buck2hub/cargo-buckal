@@ -2,7 +2,7 @@ use clap::Parser;
 
 use crate::{
     buck2::Buck2Command,
-    buckal_error, buckal_note, buckal_warn,
+    buckal_error, buckal_note,
     filter::{FilterCaller, TargetFilter, get_available_targets},
     utils::{
         UnwrapOrExit, ensure_prerequisites, get_buck2_root, get_target, is_inside_buck2_project,
@@ -106,25 +106,19 @@ pub fn execute(args: &TestArgs) {
     let cwd = std::env::current_dir().unwrap_or_exit_ctx("failed to get current directory");
     let mut relative = cwd
         .strip_prefix(&buck2_root)
-        .expect("build command should invoke inside inside a Buck2 project.")
+        .unwrap_or_exit_ctx("test command should invoke inside a Buck2 project")
         .to_string_lossy()
         .into_owned();
 
     // Normalize path separators for Buck2 (always use forward slashes)
     relative = relative.replace('\\', "/");
 
-    let test_vec = if let Some(test_name) = &args.test_name {
-        vec![format!("*{}*", test_name)]
-    } else {
-        args.test.clone()
-    };
-
     // Construct the target filter based on provided arguments
-    let target_filter = TargetFilter::from_raw_arguments(
+    let mut target_filter = TargetFilter::from_raw_arguments(
         args.lib,
         args.bin.clone(),
         args.bins,
-        test_vec,
+        args.test.clone(),
         args.tests,
         args.example.clone(),
         args.examples,
@@ -132,7 +126,14 @@ pub fn execute(args: &TestArgs) {
         args.benches,
         args.all_targets,
         FilterCaller::Test,
-    );
+    )
+    .unwrap_or_exit();
+
+    if args.test_name.is_some() && !target_filter.is_specific() {
+        // If arg `TESTNAME` is provided and no specific targets are requested,
+        // we assumed that the user knows what exactly they wants to test.
+        target_filter = TargetFilter::all_test_targets();
+    }
 
     let available_targets = get_available_targets(&relative).unwrap_or_exit();
 
@@ -182,15 +183,22 @@ pub fn execute(args: &TestArgs) {
     // Add test targets to the command based on the filter
     for target in &available_targets {
         if target_filter.target_run(target) {
+            if let Some(test_name) = &args.test_name
+                && !target.name().contains(test_name)
+            {
+                continue;
+            }
             buck2_cmd = buck2_cmd.arg(target.label());
             target_specified = true;
         }
     }
 
     if !target_specified {
-        buckal_warn!("all targets filtered out, nothing to test");
-        buckal_note!("please check if there are any testable targets in current directory");
-        return;
+        buckal_error!("all targets filtered out, nothing to test");
+        buckal_note!(
+            "please check the filter arguments and ensure if there are any testable targets in current directory"
+        );
+        std::process::exit(1);
     }
 
     // Additional arguments passed to the test executor.
