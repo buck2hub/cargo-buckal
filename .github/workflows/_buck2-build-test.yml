@@ -181,7 +181,7 @@ jobs:
           PROJECT_DIR: ${{ inputs.project_dir || inputs.project_name }}
         run: |
           cd "$PROJECT_DIR"
-          cargo buckal test --workspace
+          cargo buckal test
       - name: cargo buckal test (--target-platforms)
         if: inputs.run_tests
         shell: bash
@@ -190,7 +190,7 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           cd "$PROJECT_DIR"
-          cargo buckal test --workspace --target-platforms "//platforms:$TARGET"
+          cargo buckal test --target-platforms "//platforms:$TARGET"
       - name: cargo buckal test (--target)
         if: inputs.run_tests
         shell: bash
@@ -199,4 +199,4 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           cd "$PROJECT_DIR"
-          cargo buckal test --workspace --target "$TARGET"
+          cargo buckal test --target "$TARGET"
