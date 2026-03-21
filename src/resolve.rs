@@ -559,4 +559,167 @@ mod tests {
             "different versions should produce different fingerprints"
         );
     }
+
+    fn make_dep_with_kind(name: &str, kind: DependencyKind) -> BuckalDep {
+        BuckalDep {
+            name: name.to_string(),
+            dep_kinds: vec![BuckalDepKind { kind, target: None }],
+        }
+    }
+
+    #[test]
+    fn test_deps_of() {
+        let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut index_map = HashMap::new();
+
+        let node_a = make_node("a", "1.0.0");
+        let node_b = make_node("b", "1.0.0");
+        let node_c = make_node("c", "1.0.0");
+
+        let idx_a = dag.add_node(node_a.clone());
+        let idx_b = dag.add_node(node_b.clone());
+        let idx_c = dag.add_node(node_c.clone());
+
+        index_map.insert(node_a.package_id.clone(), idx_a);
+        index_map.insert(node_b.package_id.clone(), idx_b);
+        index_map.insert(node_c.package_id.clone(), idx_c);
+
+        dag.add_edge(idx_a, idx_b, make_dep("b")).unwrap();
+        dag.add_edge(idx_b, idx_c, make_dep("c")).unwrap();
+
+        let resolve = BuckalResolve { dag, index_map };
+
+        // A → B: one pair with dep name "b" pointing to node "b"
+        let a_deps = resolve.deps_of(&make_pkg_id("a"));
+        assert_eq!(a_deps.len(), 1);
+        assert_eq!(a_deps[0].0.name, "b");
+        assert_eq!(a_deps[0].1.name, "b");
+
+        // B → C: one pair with dep name "c" pointing to node "c"
+        let b_deps = resolve.deps_of(&make_pkg_id("b"));
+        assert_eq!(b_deps.len(), 1);
+        assert_eq!(b_deps[0].0.name, "c");
+        assert_eq!(b_deps[0].1.name, "c");
+
+        // C is a leaf — no deps
+        let c_deps = resolve.deps_of(&make_pkg_id("c"));
+        assert!(c_deps.is_empty());
+
+        // Unknown package — empty
+        let unknown_deps = resolve.deps_of(&make_pkg_id("unknown"));
+        assert!(unknown_deps.is_empty());
+    }
+
+    #[test]
+    fn test_deps_of_edge_metadata() {
+        let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut index_map = HashMap::new();
+
+        let node_a = make_node("a", "1.0.0");
+        let node_b = make_node("b", "1.0.0");
+        let node_c = make_node("c", "1.0.0");
+
+        let idx_a = dag.add_node(node_a.clone());
+        let idx_b = dag.add_node(node_b.clone());
+        let idx_c = dag.add_node(node_c.clone());
+
+        index_map.insert(node_a.package_id.clone(), idx_a);
+        index_map.insert(node_b.package_id.clone(), idx_b);
+        index_map.insert(node_c.package_id.clone(), idx_c);
+
+        dag.add_edge(
+            idx_a,
+            idx_b,
+            make_dep_with_kind("b", DependencyKind::Normal),
+        )
+        .unwrap();
+        dag.add_edge(
+            idx_a,
+            idx_c,
+            make_dep_with_kind("c", DependencyKind::Development),
+        )
+        .unwrap();
+
+        let resolve = BuckalResolve { dag, index_map };
+
+        let a_deps = resolve.deps_of(&make_pkg_id("a"));
+        assert_eq!(a_deps.len(), 2);
+
+        let dep_names: Vec<&str> = a_deps.iter().map(|(dep, _)| dep.name.as_str()).collect();
+        assert!(dep_names.contains(&"b"));
+        assert!(dep_names.contains(&"c"));
+
+        // Verify each edge carries the correct DependencyKind
+        for (dep, node) in &a_deps {
+            assert_eq!(dep.dep_kinds.len(), 1);
+            match node.name.as_str() {
+                "b" => assert!(matches!(dep.dep_kinds[0].kind, DependencyKind::Normal)),
+                "c" => {
+                    assert!(matches!(dep.dep_kinds[0].kind, DependencyKind::Development))
+                }
+                other => panic!("unexpected dep node: {}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_fingerprint_sensitive_to_edges() {
+        // resolve1: node A with no deps
+        let mut dag1 = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut index_map1 = HashMap::new();
+        let node_a1 = make_node("a", "1.0.0");
+        let idx_a1 = dag1.add_node(node_a1.clone());
+        index_map1.insert(node_a1.package_id.clone(), idx_a1);
+        let resolve1 = BuckalResolve {
+            dag: dag1,
+            index_map: index_map1,
+        };
+
+        // resolve2: same node A with an edge to B (dep name "b")
+        let mut dag2 = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut index_map2 = HashMap::new();
+        let node_a2 = make_node("a", "1.0.0");
+        let node_b2 = make_node("b", "1.0.0");
+        let idx_a2 = dag2.add_node(node_a2.clone());
+        let idx_b2 = dag2.add_node(node_b2.clone());
+        index_map2.insert(node_a2.package_id.clone(), idx_a2);
+        index_map2.insert(node_b2.package_id.clone(), idx_b2);
+        dag2.add_edge(idx_a2, idx_b2, make_dep("b")).unwrap();
+        let resolve2 = BuckalResolve {
+            dag: dag2,
+            index_map: index_map2,
+        };
+
+        // resolve3: same node A with edge to B but dep name "b-renamed"
+        let mut dag3 = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut index_map3 = HashMap::new();
+        let node_a3 = make_node("a", "1.0.0");
+        let node_b3 = make_node("b", "1.0.0");
+        let idx_a3 = dag3.add_node(node_a3.clone());
+        let idx_b3 = dag3.add_node(node_b3.clone());
+        index_map3.insert(node_a3.package_id.clone(), idx_a3);
+        index_map3.insert(node_b3.package_id.clone(), idx_b3);
+        dag3.add_edge(idx_a3, idx_b3, make_dep("b-renamed"))
+            .unwrap();
+        let resolve3 = BuckalResolve {
+            dag: dag3,
+            index_map: index_map3,
+        };
+
+        let fp1 = resolve1.fingerprint_of(&make_pkg_id("a"));
+        let fp2 = resolve2.fingerprint_of(&make_pkg_id("a"));
+        let fp3 = resolve3.fingerprint_of(&make_pkg_id("a"));
+
+        // Adding a dep changes the fingerprint
+        assert_ne!(
+            fp1, fp2,
+            "adding a dependency edge should change the fingerprint"
+        );
+
+        // Different edge metadata (dep name) changes the fingerprint
+        assert_ne!(
+            fp2, fp3,
+            "different edge metadata should change the fingerprint"
+        );
+    }
 }
