@@ -191,7 +191,6 @@ mod tests {
                 relative_path: "".to_string(),
             },
             edition: Edition::E2021,
-            deps: vec![],
             manifest_path,
             targets,
             source: None,

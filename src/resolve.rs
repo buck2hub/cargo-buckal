@@ -5,7 +5,7 @@ use cargo_metadata::{DependencyKind, Edition, PackageId, TargetKind, camino::Utf
 use daggy::{Dag, NodeIndex, Walker};
 use serde::{Deserialize, Serialize};
 
-use crate::cache::{BuckalHash, Fingerprint};
+use crate::cache::Fingerprint;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeKind {
@@ -15,12 +15,10 @@ pub enum NodeKind {
 
 /// A single dependency edge with platform/kind metadata.
 ///
-/// This mirrors the relevant parts of `cargo_metadata::NodeDep` but uses
-/// plain serializable types so it can be included in the cache fingerprint.
+/// Used as the DAG edge weight. The target node identity comes from the
+/// edge's target, so no `PackageId` is stored here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuckalDep {
-    /// The PackageId of the dependency.
-    pub pkg: PackageId,
     /// The name of the dependency (may differ from package name if renamed).
     pub name: String,
     /// Dependency kind + optional platform constraint for each edge.
@@ -57,8 +55,6 @@ pub struct BuckalNode {
     pub features: Vec<String>,
     pub kind: NodeKind,
     pub edition: Edition,
-    /// Full dependency edges with kind/platform info (replaces the old `dep_ids`).
-    pub deps: Vec<BuckalDep>,
     // -- Fields from Package --
     pub manifest_path: Utf8PathBuf,
     pub targets: Vec<BuckalTarget>,
@@ -68,14 +64,6 @@ pub struct BuckalNode {
     pub links: Option<String>,
     /// Cargo.lock checksum for this package, if available.
     pub checksum: Option<String>,
-}
-
-impl BuckalHash for BuckalNode {
-    fn fingerprint(&self) -> Fingerprint {
-        let encoded = bincode::serde::encode_to_vec(self, bincode::config::standard())
-            .expect("Serialization failed");
-        Fingerprint::new(blake3::hash(&encoded).into())
-    }
 }
 
 /// Returns `true` if `kind` is a library-like target kind
@@ -93,7 +81,7 @@ pub fn is_lib_like(kind: &TargetKind) -> bool {
 }
 
 pub struct BuckalResolve {
-    pub dag: Dag<BuckalNode, (), u32>,
+    pub dag: Dag<BuckalNode, BuckalDep, u32>,
     pub index_map: HashMap<PackageId, NodeIndex<u32>>,
 }
 
@@ -111,7 +99,7 @@ impl BuckalResolve {
         checksums_map: &HashMap<String, String>,
         root_path: &std::path::Path,
     ) -> Self {
-        let mut dag = Dag::<BuckalNode, (), u32>::new();
+        let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
         let mut index_map = HashMap::new();
 
         // Create nodes
@@ -135,23 +123,6 @@ impl BuckalResolve {
                 NodeKind::ThirdParty
             };
 
-            let deps: Vec<BuckalDep> = node
-                .deps
-                .iter()
-                .map(|d| BuckalDep {
-                    pkg: d.pkg.clone(),
-                    name: d.name.clone(),
-                    dep_kinds: d
-                        .dep_kinds
-                        .iter()
-                        .map(|dk| BuckalDepKind {
-                            kind: dk.kind,
-                            target: dk.target.clone(),
-                        })
-                        .collect(),
-                })
-                .collect();
-
             let targets: Vec<BuckalTarget> = package
                 .targets
                 .iter()
@@ -173,7 +144,6 @@ impl BuckalResolve {
                 features: node.features.iter().map(|f| f.to_string()).collect(),
                 kind,
                 edition: package.edition,
-                deps,
                 manifest_path: package.manifest_path.clone(),
                 targets,
                 source: package.source.as_ref().map(|s| s.repr.clone()),
@@ -185,18 +155,29 @@ impl BuckalResolve {
             index_map.insert(pkg_id.clone(), idx);
         }
 
-        // Create edges
+        // Create edges with BuckalDep weights
         for (pkg_id, node) in nodes_map {
             if let Some(&parent_idx) = index_map.get(pkg_id) {
                 for dep in &node.deps {
-                    if let Some(&child_idx) = index_map.get(&dep.pkg)
-                        && dag.add_edge(parent_idx, child_idx, ()).is_err()
-                    {
-                        log::warn!(
-                            "Detected cycle when adding edge from {} to {:?} — skipping",
-                            pkg_id.repr,
-                            dep.pkg.repr
-                        );
+                    if let Some(&child_idx) = index_map.get(&dep.pkg) {
+                        let buckal_dep = BuckalDep {
+                            name: dep.name.clone(),
+                            dep_kinds: dep
+                                .dep_kinds
+                                .iter()
+                                .map(|dk| BuckalDepKind {
+                                    kind: dk.kind,
+                                    target: dk.target.clone(),
+                                })
+                                .collect(),
+                        };
+                        if dag.add_edge(parent_idx, child_idx, buckal_dep).is_err() {
+                            log::warn!(
+                                "Detected cycle when adding edge from {} to {:?} — skipping",
+                                pkg_id.repr,
+                                dep.pkg.repr
+                            );
+                        }
                     }
                 }
             }
@@ -238,6 +219,56 @@ impl BuckalResolve {
     pub fn nodes(&self) -> impl Iterator<Item = &BuckalNode> {
         self.dag.raw_nodes().iter().map(|n| &n.weight)
     }
+
+    /// Returns `(edge_weight, child_node)` pairs for all children of the given node.
+    /// This is the primary way to iterate over a node's dependency edges with metadata.
+    pub fn deps_of(&self, pkg_id: &PackageId) -> Vec<(&BuckalDep, &BuckalNode)> {
+        let Some(&idx) = self.index_map.get(pkg_id) else {
+            return Vec::new();
+        };
+        self.dag
+            .children(idx)
+            .iter(&self.dag)
+            .map(|(edge_idx, node_idx)| (&self.dag[edge_idx], &self.dag[node_idx]))
+            .collect()
+    }
+
+    /// Compute a deterministic fingerprint for the given package.
+    ///
+    /// The fingerprint covers the node's intrinsic properties plus all outgoing
+    /// dependency edges (sorted by child `PackageId` for determinism).
+    pub fn fingerprint_of(&self, pkg_id: &PackageId) -> Fingerprint {
+        let idx = self.index_map[pkg_id];
+        let node = &self.dag[idx];
+
+        // Hash the node's intrinsic properties
+        let node_encoded = bincode::serde::encode_to_vec(node, bincode::config::standard())
+            .expect("Serialization failed");
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&node_encoded);
+
+        // Collect children, sort by PackageId for determinism
+        let mut children: Vec<_> = self
+            .dag
+            .children(idx)
+            .iter(&self.dag)
+            .map(|(edge_idx, node_idx)| {
+                let dep = &self.dag[edge_idx];
+                let child_node = &self.dag[node_idx];
+                (&child_node.package_id, dep)
+            })
+            .collect();
+        children.sort_by(|(a, _), (b, _)| a.repr.cmp(&b.repr));
+
+        for (child_pkg_id, dep) in children {
+            let dep_encoded = bincode::serde::encode_to_vec(dep, bincode::config::standard())
+                .expect("Serialization failed");
+            hasher.update(&dep_encoded);
+            hasher.update(child_pkg_id.repr.as_bytes());
+        }
+
+        Fingerprint::new(hasher.finalize().into())
+    }
 }
 
 #[cfg(test)]
@@ -262,26 +293,7 @@ mod tests {
         }
     }
 
-    fn make_node(name: &str, version: &str, dep_pkg_ids: Vec<PackageId>) -> BuckalNode {
-        let deps = dep_pkg_ids
-            .into_iter()
-            .map(|pkg| BuckalDep {
-                name: pkg
-                    .repr
-                    .rsplit('#')
-                    .next()
-                    .unwrap()
-                    .split('@')
-                    .next()
-                    .unwrap()
-                    .to_string(),
-                pkg,
-                dep_kinds: vec![BuckalDepKind {
-                    kind: DependencyKind::Normal,
-                    target: None,
-                }],
-            })
-            .collect();
+    fn make_node(name: &str, version: &str) -> BuckalNode {
         BuckalNode {
             package_id: make_pkg_id(name),
             name: name.to_string(),
@@ -289,7 +301,6 @@ mod tests {
             features: vec![],
             kind: NodeKind::ThirdParty,
             edition: Edition::E2021,
-            deps,
             manifest_path: Utf8PathBuf::from(format!("/tmp/{}/Cargo.toml", name)),
             targets: vec![],
             source: Some("registry+https://github.com/rust-lang/crates.io-index".to_string()),
@@ -298,14 +309,24 @@ mod tests {
         }
     }
 
+    fn make_dep(name: &str) -> BuckalDep {
+        BuckalDep {
+            name: name.to_string(),
+            dep_kinds: vec![BuckalDepKind {
+                kind: DependencyKind::Normal,
+                target: None,
+            }],
+        }
+    }
+
     #[test]
     fn test_three_node_chain() {
-        let mut dag = Dag::<BuckalNode, (), u32>::new();
+        let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
         let mut index_map = HashMap::new();
 
-        let node_a = make_node("a", "1.0.0", vec![make_pkg_id("b")]);
-        let node_b = make_node("b", "1.0.0", vec![make_pkg_id("c")]);
-        let node_c = make_node("c", "1.0.0", vec![]);
+        let node_a = make_node("a", "1.0.0");
+        let node_b = make_node("b", "1.0.0");
+        let node_c = make_node("c", "1.0.0");
 
         let idx_a = dag.add_node(node_a.clone());
         let idx_b = dag.add_node(node_b.clone());
@@ -315,8 +336,8 @@ mod tests {
         index_map.insert(node_b.package_id.clone(), idx_b);
         index_map.insert(node_c.package_id.clone(), idx_c);
 
-        dag.add_edge(idx_a, idx_b, ()).unwrap();
-        dag.add_edge(idx_b, idx_c, ()).unwrap();
+        dag.add_edge(idx_a, idx_b, make_dep("b")).unwrap();
+        dag.add_edge(idx_b, idx_c, make_dep("c")).unwrap();
 
         let resolve = BuckalResolve { dag, index_map };
 
@@ -338,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_first_party_relative_path() {
-        let mut node = make_node("my-crate", "0.1.0", vec![]);
+        let mut node = make_node("my-crate", "0.1.0");
         node.package_id = make_pkg_id("my-crate");
         node.kind = NodeKind::FirstParty {
             relative_path: "crates/my-crate".to_string(),
@@ -355,11 +376,11 @@ mod tests {
 
     #[test]
     fn test_find_by_name() {
-        let mut dag = Dag::<BuckalNode, (), u32>::new();
+        let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
         let mut index_map = HashMap::new();
 
-        let node_a = make_node("serde", "1.0.0", vec![]);
-        let node_b = make_node("tokio", "1.0.0", vec![]);
+        let node_a = make_node("serde", "1.0.0");
+        let node_b = make_node("tokio", "1.0.0");
 
         let idx_a = dag.add_node(node_a.clone());
         let idx_b = dag.add_node(node_b.clone());
@@ -377,15 +398,49 @@ mod tests {
 
     #[test]
     fn test_fingerprint_stability_and_sensitivity() {
-        let node1 = make_node("foo", "1.0.0", vec![]);
-        let node2 = make_node("foo", "1.0.0", vec![]);
-        let node3 = make_node("foo", "1.1.0", vec![]);
+        let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut index_map = HashMap::new();
+
+        let node1 = make_node("foo", "1.0.0");
+        let node2 = make_node("foo", "1.0.0");
+        let node3 = make_node("foo", "1.1.0");
+
+        let idx1 = dag.add_node(node1.clone());
+        index_map.insert(node1.package_id.clone(), idx1);
+        let resolve1 = BuckalResolve {
+            dag,
+            index_map: index_map.clone(),
+        };
+
+        let mut dag2 = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut index_map2 = HashMap::new();
+        let idx2 = dag2.add_node(node2.clone());
+        index_map2.insert(node2.package_id.clone(), idx2);
+        let resolve2 = BuckalResolve {
+            dag: dag2,
+            index_map: index_map2,
+        };
+
+        let mut dag3 = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut index_map3 = HashMap::new();
+        let idx3 = dag3.add_node(node3.clone());
+        index_map3.insert(node3.package_id.clone(), idx3);
+        let resolve3 = BuckalResolve {
+            dag: dag3,
+            index_map: index_map3,
+        };
 
         // Same data -> same fingerprint
-        assert_eq!(node1.fingerprint(), node2.fingerprint());
+        assert_eq!(
+            resolve1.fingerprint_of(&node1.package_id),
+            resolve2.fingerprint_of(&node2.package_id)
+        );
 
         // Different version -> different fingerprint
-        assert_ne!(node1.fingerprint(), node3.fingerprint());
+        assert_ne!(
+            resolve1.fingerprint_of(&node1.package_id),
+            resolve3.fingerprint_of(&node3.package_id)
+        );
     }
 
     /// Diamond dependency with version conflict:
@@ -399,18 +454,14 @@ mod tests {
     /// Both versions of `common` must exist as separate nodes in the DAG.
     #[test]
     fn test_diamond_dependency_version_conflict() {
-        let mut dag = Dag::<BuckalNode, (), u32>::new();
+        let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
         let mut index_map = HashMap::new();
 
         let common_v1_id = make_pkg_id_versioned("common", "1.0.0");
         let common_v2_id = make_pkg_id_versioned("common", "2.0.0");
 
         let root = {
-            let mut n = make_node(
-                "root",
-                "0.1.0",
-                vec![make_pkg_id("dep-a"), make_pkg_id("dep-b")],
-            );
+            let mut n = make_node("root", "0.1.0");
             n.kind = NodeKind::FirstParty {
                 relative_path: "".to_string(),
             };
@@ -418,17 +469,17 @@ mod tests {
             n
         };
 
-        let dep_a = make_node("dep-a", "1.0.0", vec![common_v1_id.clone()]);
-        let dep_b = make_node("dep-b", "1.0.0", vec![common_v2_id.clone()]);
+        let dep_a = make_node("dep-a", "1.0.0");
+        let dep_b = make_node("dep-b", "1.0.0");
 
         let common_v1 = {
-            let mut n = make_node("common", "1.0.0", vec![]);
+            let mut n = make_node("common", "1.0.0");
             n.package_id = common_v1_id.clone();
             n
         };
 
         let common_v2 = {
-            let mut n = make_node("common", "2.0.0", vec![]);
+            let mut n = make_node("common", "2.0.0");
             n.package_id = common_v2_id.clone();
             n
         };
@@ -445,10 +496,10 @@ mod tests {
         index_map.insert(common_v1_id.clone(), idx_cv1);
         index_map.insert(common_v2_id.clone(), idx_cv2);
 
-        dag.add_edge(idx_root, idx_a, ()).unwrap();
-        dag.add_edge(idx_root, idx_b, ()).unwrap();
-        dag.add_edge(idx_a, idx_cv1, ()).unwrap();
-        dag.add_edge(idx_b, idx_cv2, ()).unwrap();
+        dag.add_edge(idx_root, idx_a, make_dep("dep-a")).unwrap();
+        dag.add_edge(idx_root, idx_b, make_dep("dep-b")).unwrap();
+        dag.add_edge(idx_a, idx_cv1, make_dep("common")).unwrap();
+        dag.add_edge(idx_b, idx_cv2, make_dep("common")).unwrap();
 
         let resolve = BuckalResolve { dag, index_map };
 
@@ -503,8 +554,8 @@ mod tests {
 
         // Fingerprints of common@1.0.0 and common@2.0.0 must differ
         assert_ne!(
-            common_v1.fingerprint(),
-            common_v2.fingerprint(),
+            resolve.fingerprint_of(&common_v1_id),
+            resolve.fingerprint_of(&common_v2_id),
             "different versions should produce different fingerprints"
         );
     }

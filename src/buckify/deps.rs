@@ -202,12 +202,7 @@ pub(super) fn set_deps(
     kind: CargoTargetKind,
     ctx: &BuckalContext,
 ) -> Result<()> {
-    for dep in &node.deps {
-        // Look up the dep node from the resolve DAG
-        let Some(dep_node) = ctx.resolve.get(&dep.pkg) else {
-            continue;
-        };
-
+    for (dep, dep_node) in ctx.resolve.deps_of(&node.package_id) {
         let mut unconditional = false;
         let mut platforms = Set::<Os>::new();
         let mut has_unsupported_platform = false;

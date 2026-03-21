@@ -346,7 +346,6 @@ mod tests {
                 relative_path: "".to_string(),
             },
             edition: Edition::E2021,
-            deps: vec![],
             manifest_path: Utf8PathBuf::from("/tmp/Cargo.toml"),
             targets,
             source: None,

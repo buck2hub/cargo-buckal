@@ -52,15 +52,18 @@ cargo metadata ──> BuckalResolve::from_metadata()
    ┌──────────────────────────────────────────┐
    │            BuckalResolve                  │
    │                                           │
-   │   dag: Dag<BuckalNode>    (daggy crate)   │
+   │   dag: Dag<BuckalNode, BuckalDep>         │
    │   index_map: HashMap<PackageId, NodeIdx>  │
    │                                           │
    │   Methods:                                │
    │     .get(pkg_id)        -> &BuckalNode    │
    │     .dependencies(id)   -> [&BuckalNode]  │
    │     .dependents(id)     -> [&BuckalNode]  │
+   │     .deps_of(id)        -> [(&BuckalDep,  │
+   │                              &BuckalNode)]│
    │     .find_by_name(name) -> [&BuckalNode]  │
    │     .nodes()            -> iter           │
+   │     .fingerprint_of(id) -> Fingerprint    │
    └──────────────────────────────────────────┘
                     |
                     v
@@ -87,7 +90,6 @@ pub struct BuckalNode {
     pub features: Vec<String>,
     pub kind: NodeKind,           // FirstParty { relative_path } or ThirdParty
     pub edition: Edition,
-    pub deps: Vec<BuckalDep>,
     pub manifest_path: Utf8PathBuf,
     pub targets: Vec<BuckalTarget>,
     pub source: Option<String>,
@@ -101,16 +103,17 @@ Key improvements over the old split representation:
 - **Single lookup** gives you everything about a package.
 - **`NodeKind`** is computed once at construction time (based on whether the package path is under
   the workspace root), eliminating repeated `package.source.is_none()` checks.
-- **`BuckalDep`**, **`BuckalDepKind`**, and **`BuckalTarget`** are serializable replacements for
-  their `cargo_metadata` counterparts.
+- **`BuckalDep`** is used as the DAG edge weight (not stored in `BuckalNode`), carrying dependency
+  name and `BuckalDepKind` (kind + platform constraint) for each edge.
+- **`BuckalTarget`** is a serializable replacement for `cargo_metadata::Target`.
 
 ### `BuckalResolve`
 
-A proper DAG wrapping `daggy::Dag<BuckalNode>`:
+A proper DAG wrapping `daggy::Dag<BuckalNode, BuckalDep>`:
 
 ```rust
 pub struct BuckalResolve {
-    pub dag: Dag<BuckalNode, (), u32>,
+    pub dag: Dag<BuckalNode, BuckalDep, u32>,
     pub index_map: HashMap<PackageId, NodeIndex<u32>>,
 }
 ```
@@ -122,9 +125,11 @@ Methods:
 | `from_metadata(...)` | Constructs the DAG from raw cargo metadata |
 | `get(pkg_id)` | O(1) node lookup by `PackageId` |
 | `dependencies(pkg_id)` | Direct dependency nodes (children in the DAG) |
-| `dependents(pkg_id)` | Reverse dependency nodes (parents in the DAG) — **new** |
+| `dependents(pkg_id)` | Reverse dependency nodes (parents in the DAG) |
+| `deps_of(pkg_id)` | `(edge_weight, child_node)` pairs for iterating with metadata |
 | `find_by_name(name, version)` | Find a node by crate name and optional version |
 | `nodes()` | Iterator over all nodes |
+| `fingerprint_of(pkg_id)` | Deterministic fingerprint covering node + edges |
 
 ### Updated `BuckalContext`
 
@@ -166,11 +171,12 @@ buckify_dep_node(node: &Node, ctx)          buckify_dep_node(node: &BuckalNode, 
   let targets = &pkg.targets;                  let targets = &node.targets;
 
 set_deps(rule, node, kind, ctx)             set_deps(rule, node, kind, ctx)
-  let dep_pkg = ctx.packages_map.get(..);     let dep_node = ctx.resolve.get(..);
+  let dep_pkg = ctx.packages_map.get(..);     for (dep, dep_node) in ctx.resolve.deps_of(..)
 ```
 
 - `buckify_dep_node(node: &BuckalNode, ctx)` — no longer needs a separate `packages_map` lookup.
-- `set_deps(rule, node, kind, ctx)` — resolves deps via `ctx.resolve.get(&dep.pkg)`.
+- `set_deps(rule, node, kind, ctx)` — resolves deps via `ctx.resolve.deps_of(&node.package_id)`.
+- `emit_buildscript_run(node, build_target, ctx)` — iterates with `ctx.resolve.deps_of()`.
 - `emit_cargo_manifest(node, ctx)` — new workspace manifest export logic for first-party crates.
 
 The `buckify/` module was also restructured from a single `buckify.rs` file to a `buckify/mod.rs`
@@ -179,8 +185,9 @@ directory module.
 ### Cache changes
 
 - Cache version bumped from 2 to 3.
-- `BuckalHash` is now implemented on `BuckalNode`, fingerprinting all fields (targets, source,
-  checksum, edition, links, kind).
+- Fingerprints are computed by `BuckalResolve::fingerprint_of()`, which hashes the `BuckalNode`
+  intrinsic fields (targets, source, checksum, edition, links, kind) plus all outgoing edge
+  weights (`BuckalDep`) and child `PackageId`s, sorted for determinism.
 - Old caches (version < 3) are silently discarded and rebuilt.
 - Future caches (version > 3) produce an error prompting the user to upgrade.
 

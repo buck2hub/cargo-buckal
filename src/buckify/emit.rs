@@ -11,7 +11,7 @@ use crate::{
     buckify::actions::is_third_party,
     context::BuckalContext,
     platform::{buck_labels, lookup_platforms},
-    resolve::{BuckalNode, BuckalTarget},
+    resolve::{BuckalDepKind, BuckalNode, BuckalTarget},
     utils::{UnwrapOrExit, get_buck2_root, get_cfgs, get_target, get_vendor_path_relative},
 };
 
@@ -226,10 +226,9 @@ pub(super) fn emit_buildscript_run(
 
     // Set environment variables from dependencies that have the `links` manifest key.
     // See https://doc.rust-lang.org/cargo/reference/build-scripts.html#the-links-manifest-key
-    for dep in &node.deps {
-        if let Some(dep_node) = ctx.resolve.get(&dep.pkg)
-            && dep_node.links.is_some()
-            && dep.dep_kinds.iter().any(|dk| {
+    for (dep, dep_node) in ctx.resolve.deps_of(&node.package_id) {
+        if dep_node.links.is_some()
+            && dep.dep_kinds.iter().any(|dk: &BuckalDepKind| {
                 dep_kind_matches(CargoTargetKind::Lib, dk.kind)
                     && dk
                         .target

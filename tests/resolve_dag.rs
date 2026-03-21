@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cargo_buckal::cache::{BuckalCache, BuckalHash};
+use cargo_buckal::cache::BuckalCache;
 use cargo_buckal::resolve::{BuckalNode, BuckalResolve, NodeKind};
 use cargo_metadata::{MetadataCommand, PackageId};
 
@@ -469,8 +469,8 @@ fn test_diamond_deps_version_conflict() {
 
     // Fingerprints of the two itoa versions must differ
     assert_ne!(
-        itoa_old_node.fingerprint(),
-        itoa_new_node.fingerprint(),
+        resolve.fingerprint_of(&itoa_old_node.package_id),
+        resolve.fingerprint_of(&itoa_new_node.package_id),
         "different itoa versions should have different fingerprints"
     );
 
