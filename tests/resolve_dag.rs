@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cargo_buckal::cache::BuckalCache;
+use cargo_buckal::cache::{BuckalCache, ChangeType};
 use cargo_buckal::resolve::{BuckalNode, BuckalResolve, NodeKind};
 use cargo_metadata::{MetadataCommand, PackageId};
 
@@ -353,7 +353,7 @@ fn resolve_from_fixture(fixture_name: &str) -> BuckalResolve {
 /// This creates a true diamond dependency: `diamond-root` transitively pulls in
 /// two semver-incompatible versions of `itoa` through different intermediate crates.
 /// Cargo resolves both `itoa 0.4.x` and `itoa 1.x` since they are semver-incompatible,
-/// producing two separate nodes in the DAG for the same crate name.
+/// producing two separate nodes in the graph for the same crate name.
 #[test]
 fn test_diamond_deps_version_conflict() {
     let resolve = resolve_from_fixture("diamond-deps");
@@ -495,7 +495,7 @@ fn test_diamond_deps_version_conflict() {
         root_dep_names
     );
 
-    // Traversing the DAG from diamond-root should reach both itoa versions transitively
+    // Traversing the graph from diamond-root should reach both itoa versions transitively
     let mut transitive_itoa_versions: Vec<String> = Vec::new();
     for dep in &root_deps {
         for transitive in resolve.dependencies(&dep.package_id) {
@@ -537,7 +537,7 @@ fn test_diamond_deps_version_conflict() {
 /// - `compat-root` depends on both
 ///
 /// Since both constraints are semver-compatible, Cargo unifies them into a single
-/// `itoa` version (>=1.0.5) — producing exactly one node in the DAG, unlike the
+/// `itoa` version (>=1.0.5) — producing exactly one node in the graph, unlike the
 /// incompatible diamond which produces two.
 #[test]
 fn test_diamond_deps_semver_compatible() {
@@ -630,5 +630,377 @@ fn test_diamond_deps_semver_compatible() {
     assert_eq!(
         transitive_itoa_ids[0], transitive_itoa_ids[1],
         "both paths should reach the same itoa node"
+    );
+}
+
+/// Integration test: dev-dependency pseudo-cycle is rejected as an error.
+///
+/// The fixture at `tests/fixtures/dev-dep-cycle/` is a workspace with two crates:
+/// - `core-lib` has `[dev-dependencies] test-utils = { path = "../test-utils" }`
+/// - `test-utils` has `[dependencies] core-lib = { path = "../core-lib" }`
+///
+/// `cargo metadata` flattens this into a single graph, creating a cycle:
+/// `core-lib → test-utils → core-lib`. Cargo allows this, but Buck2 requires
+/// a strictly acyclic graph, so `from_metadata` must return an error.
+#[test]
+fn test_dev_dependency_cycle() {
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dev-dep-cycle");
+    let manifest_path = fixture_dir.join("Cargo.toml");
+    let metadata = MetadataCommand::new()
+        .manifest_path(&manifest_path)
+        .exec()
+        .expect("cargo metadata failed");
+    let packages_map: HashMap<PackageId, cargo_metadata::Package> = metadata
+        .packages
+        .into_iter()
+        .map(|p| (p.id.clone(), p))
+        .collect();
+    let resolve = metadata.resolve.expect("no resolve in metadata");
+    let nodes_map: HashMap<PackageId, cargo_metadata::Node> = resolve
+        .nodes
+        .into_iter()
+        .map(|n| (n.id.clone(), n))
+        .collect();
+    let root_path = std::path::Path::new(metadata.workspace_root.as_str());
+
+    let result =
+        BuckalResolve::from_metadata(&nodes_map, &packages_map, &HashMap::new(), root_path);
+
+    let err_msg = result
+        .err()
+        .expect("dev-dep cycle should cause from_metadata to fail")
+        .to_string();
+    assert!(
+        err_msg.contains("dev-dependency cycle detected"),
+        "error should mention dev-dependency cycle, got: {}",
+        err_msg
+    );
+    assert!(
+        err_msg.contains("core-lib") || err_msg.contains("test-utils"),
+        "error should identify the cycle-forming packages, got: {}",
+        err_msg
+    );
+    assert!(
+        err_msg.contains("doc.rust-lang.org/cargo/reference/resolver.html#dev-dependency-cycles"),
+        "error should include Cargo docs link, got: {}",
+        err_msg
+    );
+}
+
+/// Verify that `cargo test` succeeds for a mutual dev-dependency cycle.
+///
+/// Despite the flattened `cargo metadata` graph containing a cycle
+/// (`crate-a → crate-b → crate-a`), Cargo can build all targets including
+/// tests because dev-dependencies are only used for test/example builds,
+/// not library builds. The actual build order is:
+///
+/// ```text
+/// 1. Build crate-a lib  (no deps — dev-deps not used)
+/// 2. Build crate-b lib  (no deps — dev-deps not used)
+/// 3. Build crate-a tests (needs crate-b lib — already built ✓)
+/// 4. Build crate-b tests (needs crate-a lib — already built ✓)
+/// ```
+///
+/// Each test target exercises the dev-dependency: `crate-a`'s tests call
+/// `crate_b::b_value()` and `crate-b`'s tests call `crate_a::a_value()`.
+#[test]
+fn test_dev_dev_cycle_cargo_test_succeeds() {
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dev-dev-cycle");
+
+    let output = std::process::Command::new("cargo")
+        .arg("test")
+        .current_dir(&fixture_dir)
+        .output()
+        .expect("failed to run cargo test");
+
+    assert!(
+        output.status.success(),
+        "cargo test should succeed for mutual dev-dep cycle.\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify both test targets actually ran (test names appear in stdout)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("test tests::test_a_uses_b")
+            && stdout.contains("test tests::test_b_uses_a"),
+        "both test targets should run.\nstdout: {}\nstderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Verify that a project without Cargo.lock can still produce a valid resolve and cache.
+///
+/// This is the scenario for freshly initialized lib crates where `cargo buckal add` is
+/// the first command run. The old code called `BuckalContext::new()` which panicked on
+/// missing Cargo.lock; the fix passes empty checksums instead.
+#[test]
+fn test_resolve_without_lockfile() {
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
+    let cargo_toml = tmp.path().join("Cargo.toml");
+    std::fs::write(
+        &cargo_toml,
+        "[package]\nname = \"no-lock\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    std::fs::write(tmp.path().join("src/lib.rs"), "").unwrap();
+
+    // Cargo.lock does NOT exist — this is the key precondition
+    assert!(!tmp.path().join("Cargo.lock").exists());
+
+    // cargo metadata works fine without Cargo.lock
+    let metadata = MetadataCommand::new()
+        .manifest_path(&cargo_toml)
+        .exec()
+        .expect("cargo metadata should work without Cargo.lock");
+
+    let packages_map: HashMap<PackageId, cargo_metadata::Package> = metadata
+        .packages
+        .into_iter()
+        .map(|p| (p.id.clone(), p))
+        .collect();
+    let nodes_map: HashMap<PackageId, cargo_metadata::Node> = metadata
+        .resolve
+        .expect("resolve should be present")
+        .nodes
+        .into_iter()
+        .map(|n| (n.id.clone(), n))
+        .collect();
+
+    // Build resolve with empty checksums (no Cargo.lock available)
+    let resolve =
+        BuckalResolve::from_metadata(&nodes_map, &packages_map, &HashMap::new(), tmp.path())
+            .expect("from_metadata should succeed for a single-crate project");
+
+    // Should have the one local package
+    let node = resolve
+        .find_by_name("no-lock", None)
+        .expect("no-lock not found");
+    assert!(matches!(&node.kind, NodeKind::FirstParty { .. }));
+
+    // Cache construction should work despite missing checksums
+    let ws_root = cargo_metadata::camino::Utf8PathBuf::from(tmp.path().to_str().unwrap());
+    let cache = BuckalCache::from_resolve(&resolve, &ws_root);
+    let cache_str = toml::to_string_pretty(&cache).unwrap();
+    assert!(
+        cache_str.contains("fingerprints"),
+        "cache should contain fingerprints section"
+    );
+}
+
+/// Verify that building a fallback cache with --manifest-path targets the correct workspace.
+///
+/// When the user runs `cargo buckal add --manifest-path subcrate/Cargo.toml`,
+/// the fallback cache must be built from the subcrate's metadata, not from cwd.
+/// Otherwise the diff compares the wrong workspaces and may produce spurious
+/// "Removed" entries that delete BUCK files in the wrong locations.
+#[test]
+fn test_fallback_cache_honors_manifest_path() {
+    // Build caches from two different fixture workspaces
+    let fixture_a = resolve_from_fixture("diamond-deps");
+    let fixture_b = resolve_from_fixture("diamond-deps-compat");
+
+    let ws_a = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/diamond-deps");
+    let ws_b =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/diamond-deps-compat");
+
+    let cache_a = BuckalCache::from_resolve(
+        &fixture_a,
+        &cargo_metadata::camino::Utf8PathBuf::from(ws_a.to_str().unwrap()),
+    );
+    let cache_b = BuckalCache::from_resolve(
+        &fixture_b,
+        &cargo_metadata::camino::Utf8PathBuf::from(ws_b.to_str().unwrap()),
+    );
+
+    let str_a = toml::to_string_pretty(&cache_a).unwrap();
+    let str_b = toml::to_string_pretty(&cache_b).unwrap();
+
+    // The two caches must differ — if manifest_path is ignored, both would
+    // resolve to the same cwd workspace and produce identical caches.
+    assert_ne!(
+        str_a, str_b,
+        "caches from different workspaces must differ; \
+         using the wrong manifest_path would make them identical"
+    );
+
+    // diamond-deps has two itoa versions; diamond-deps-compat has one
+    // Both reference itoa, but the caches differ because the workspaces
+    // have different package sets and fingerprints.
+    assert!(
+        str_a.contains("itoa"),
+        "diamond-deps cache should reference itoa"
+    );
+    assert!(
+        str_b.contains("itoa"),
+        "diamond-deps-compat cache should also reference itoa"
+    );
+
+    // diamond-deps-compat has uses-itoa-loose; diamond-deps does not
+    assert!(
+        str_b.contains("uses-itoa-loose"),
+        "diamond-deps-compat cache should reference uses-itoa-loose"
+    );
+    assert!(
+        !str_a.contains("uses-itoa-loose"),
+        "diamond-deps cache should not reference uses-itoa-loose"
+    );
+}
+
+/// Verify that diffing against an empty cache loses removal detection.
+///
+/// When `migrate` falls back to `BuckalCache::new_empty()` (e.g. after a cache version
+/// bump), packages that were removed from the dependency tree are never detected as
+/// "Removed" — their stale vendored dirs/BUCK files are left behind. Diffing against a
+/// real fallback cache correctly detects these removals.
+#[test]
+fn test_empty_cache_loses_removals() {
+    // Build two caches from different workspaces:
+    // - "old" has diamond-deps packages (includes itoa 0.4, itoa 1.x, etc.)
+    // - "new" has diamond-deps-compat packages (uses-itoa-loose, uses-itoa-pinned, etc.)
+    let old_resolve = resolve_from_fixture("diamond-deps");
+    let new_resolve = resolve_from_fixture("diamond-deps-compat");
+
+    let ws_old =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/diamond-deps");
+    let ws_new =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/diamond-deps-compat");
+
+    let old_cache = BuckalCache::from_resolve(
+        &old_resolve,
+        &cargo_metadata::camino::Utf8PathBuf::from(ws_old.to_str().unwrap()),
+    );
+    let new_cache = BuckalCache::from_resolve(
+        &new_resolve,
+        &cargo_metadata::camino::Utf8PathBuf::from(ws_new.to_str().unwrap()),
+    );
+    let empty_cache = BuckalCache::new_empty();
+
+    // Diffing new against OLD cache: should detect Removed entries
+    // (packages in old but not new = removed)
+    let diff_real = new_cache.diff(
+        &old_cache,
+        &cargo_metadata::camino::Utf8PathBuf::from(ws_new.to_str().unwrap()),
+    );
+    let removed_count = diff_real
+        .changes
+        .values()
+        .filter(|c| matches!(c, ChangeType::Removed))
+        .count();
+    assert!(
+        removed_count > 0,
+        "diffing against a real old cache should detect removals, got 0"
+    );
+
+    // Diffing new against EMPTY cache: no Removed entries — this is the bug
+    let diff_empty = new_cache.diff(
+        &empty_cache,
+        &cargo_metadata::camino::Utf8PathBuf::from(ws_new.to_str().unwrap()),
+    );
+    let removed_empty = diff_empty
+        .changes
+        .values()
+        .filter(|c| matches!(c, ChangeType::Removed))
+        .count();
+    assert_eq!(
+        removed_empty, 0,
+        "diffing against an empty cache cannot detect removals"
+    );
+
+    // This demonstrates the problem: using new_empty() as fallback loses removals.
+    // The fix is to use get_last_cache() which rebuilds from metadata.
+    assert!(
+        removed_count > removed_empty,
+        "real fallback cache detects more removals ({}) than empty cache ({})",
+        removed_count,
+        removed_empty
+    );
+}
+
+/// Integration test: normal-dependency cycle (both edges are `[dependencies]`).
+///
+/// The fixture at `tests/fixtures/normal-dep-cycle/` is a workspace with two crates:
+/// - `crate-a` has `[dependencies] crate-b = { path = "../crate-b" }`
+/// - `crate-b` has `[dependencies] crate-a = { path = "../crate-a" }`
+///
+/// This is a hard cycle — Cargo rejects it outright. `cargo metadata` itself fails
+/// with "cyclic package dependency", so `BuckalResolve::from_metadata` is never reached.
+#[test]
+fn test_normal_dep_cycle_rejected_by_cargo() {
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/normal-dep-cycle");
+    assert!(
+        fixture_dir.join("Cargo.toml").exists(),
+        "fixture not found at {}",
+        fixture_dir.display()
+    );
+
+    let result = MetadataCommand::new()
+        .manifest_path(fixture_dir.join("Cargo.toml"))
+        .exec();
+
+    assert!(
+        result.is_err(),
+        "cargo metadata should fail for a normal-dep cycle, but it succeeded"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("cyclic package dependency"),
+        "error should mention cyclic dependency, got: {}",
+        err_msg
+    );
+}
+
+/// Integration test: dev-dependency cycle where BOTH edges are `[dev-dependencies]`.
+///
+/// The fixture at `tests/fixtures/dev-dev-cycle/` is a workspace with two crates:
+/// - `crate-a` has `[dev-dependencies] crate-b = { path = "../crate-b" }`
+/// - `crate-b` has `[dev-dependencies] crate-a = { path = "../crate-a" }`
+///
+/// `cargo metadata` succeeds (dev-deps don't create build-time cycles), but the
+/// flattened graph contains a cycle. `from_metadata` must return an error because
+/// Buck2 requires a strictly acyclic graph.
+#[test]
+fn test_dev_dev_cycle_rejected() {
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dev-dev-cycle");
+    let manifest_path = fixture_dir.join("Cargo.toml");
+    let metadata = MetadataCommand::new()
+        .manifest_path(&manifest_path)
+        .exec()
+        .expect("cargo metadata should succeed for dev-dev cycle");
+    let packages_map: HashMap<PackageId, cargo_metadata::Package> = metadata
+        .packages
+        .into_iter()
+        .map(|p| (p.id.clone(), p))
+        .collect();
+    let resolve = metadata.resolve.expect("no resolve in metadata");
+    let nodes_map: HashMap<PackageId, cargo_metadata::Node> = resolve
+        .nodes
+        .into_iter()
+        .map(|n| (n.id.clone(), n))
+        .collect();
+    let root_path = std::path::Path::new(metadata.workspace_root.as_str());
+
+    let result =
+        BuckalResolve::from_metadata(&nodes_map, &packages_map, &HashMap::new(), root_path);
+
+    let err_msg = result
+        .err()
+        .expect("dev-dev cycle should cause from_metadata to fail")
+        .to_string();
+    assert!(
+        err_msg.contains("dev-dependency cycle detected"),
+        "error should mention dev-dependency cycle, got: {}",
+        err_msg
+    );
+    assert!(
+        err_msg.contains("crate-a") || err_msg.contains("crate-b"),
+        "error should identify the cycle-forming packages, got: {}",
+        err_msg
     );
 }

@@ -1,0 +1,7 @@
+[package]
+name = "core-lib"
+version = "0.1.0"
+edition = "2021"
+
+[dev-dependencies]
+test-utils = { path = "../test-utils" }
