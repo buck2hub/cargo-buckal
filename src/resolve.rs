@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use anyhow::bail;
 use cargo_metadata::{DependencyKind, Edition, PackageId, TargetKind, camino::Utf8PathBuf};
 use daggy::{Dag, NodeIndex, Walker};
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,7 @@ pub enum NodeKind {
 
 /// A single dependency edge with platform/kind metadata.
 ///
-/// Used as the DAG edge weight. The target node identity comes from the
+/// Used as the graph edge weight. The target node identity comes from the
 /// edge's target, so no `PackageId` is stored here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuckalDep {
@@ -91,14 +92,18 @@ impl BuckalResolve {
         self.index_map.get(pkg_id).map(|&idx| &self.dag[idx])
     }
 
-    /// Build a DAG from raw cargo metadata maps. `root_path` is used to compute
+    /// Build a dependency DAG from raw cargo metadata maps. `root_path` is used to compute
     /// relative paths for first-party packages (typically the buck2 root or workspace root).
+    ///
+    /// Uses `daggy::Dag` which enforces acyclicity. Edges are inserted in two passes:
+    /// first normal/build deps, then dev deps. Returns an error if any edge would form
+    /// a cycle — Buck2 requires a strictly acyclic dependency graph.
     pub fn from_metadata(
         nodes_map: &HashMap<PackageId, cargo_metadata::Node>,
         packages_map: &HashMap<PackageId, cargo_metadata::Package>,
         checksums_map: &HashMap<String, String>,
         root_path: &std::path::Path,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
         let mut index_map = HashMap::new();
 
@@ -155,27 +160,40 @@ impl BuckalResolve {
             index_map.insert(pkg_id.clone(), idx);
         }
 
-        // Create edges with BuckalDep weights
+        // Pass 1: Normal and Build deps (non-dev)
         for (pkg_id, node) in nodes_map {
             if let Some(&parent_idx) = index_map.get(pkg_id) {
                 for dep in &node.deps {
                     if let Some(&child_idx) = index_map.get(&dep.pkg) {
+                        let non_dev_kinds: Vec<_> = dep
+                            .dep_kinds
+                            .iter()
+                            .filter(|dk| dk.kind != DependencyKind::Development)
+                            .map(|dk| BuckalDepKind {
+                                kind: dk.kind,
+                                target: dk.target.clone(),
+                            })
+                            .collect();
+                        if non_dev_kinds.is_empty() {
+                            continue;
+                        }
                         let buckal_dep = BuckalDep {
                             name: dep.name.clone(),
-                            dep_kinds: dep
-                                .dep_kinds
-                                .iter()
-                                .map(|dk| BuckalDepKind {
-                                    kind: dk.kind,
-                                    target: dk.target.clone(),
-                                })
-                                .collect(),
+                            dep_kinds: non_dev_kinds,
                         };
                         if dag.add_edge(parent_idx, child_idx, buckal_dep).is_err() {
-                            log::warn!(
-                                "Detected cycle when adding edge from {} to {:?} — skipping",
-                                pkg_id.repr,
-                                dep.pkg.repr
+                            let parent_name = &dag[parent_idx].name;
+                            let child_name = &dag[child_idx].name;
+                            bail!(
+                                "dependency cycle detected: {parent_name} -> {child_name}\n\
+                                 \n\
+                                 cargo-buckal requires a strictly acyclic dependency graph to \
+                                 generate BUCK files, but a cycle was found among normal/build \
+                                 dependencies.\n\
+                                 \n\
+                                 This is unexpected because Cargo itself rejects cycles in normal \
+                                 dependencies. Please check your Cargo.toml files for circular \
+                                 [dependencies] or [build-dependencies] entries."
                             );
                         }
                     }
@@ -183,7 +201,51 @@ impl BuckalResolve {
             }
         }
 
-        Self { dag, index_map }
+        // Pass 2: Dev deps only
+        for (pkg_id, node) in nodes_map {
+            if let Some(&parent_idx) = index_map.get(pkg_id) {
+                for dep in &node.deps {
+                    if let Some(&child_idx) = index_map.get(&dep.pkg) {
+                        let dev_kinds: Vec<_> = dep
+                            .dep_kinds
+                            .iter()
+                            .filter(|dk| dk.kind == DependencyKind::Development)
+                            .map(|dk| BuckalDepKind {
+                                kind: dk.kind,
+                                target: dk.target.clone(),
+                            })
+                            .collect();
+                        if dev_kinds.is_empty() {
+                            continue;
+                        }
+                        let buckal_dep = BuckalDep {
+                            name: dep.name.clone(),
+                            dep_kinds: dev_kinds,
+                        };
+                        if dag.add_edge(parent_idx, child_idx, buckal_dep).is_err() {
+                            let parent_name = &dag[parent_idx].name;
+                            let child_name = &dag[child_idx].name;
+                            bail!(
+                                "dev-dependency cycle detected: {parent_name} -> {child_name}\n\
+                                 \n\
+                                 cargo-buckal requires a strictly acyclic dependency graph to \
+                                 generate BUCK files. Cargo allows dev-dependency cycles \
+                                 (https://doc.rust-lang.org/cargo/reference/resolver.html\
+                                 #dev-dependency-cycles), but Buck2 does not.\n\
+                                 \n\
+                                 To fix this, restructure your workspace so that the \
+                                 dev-dependency from `{parent_name}` to `{child_name}` does \
+                                 not form a cycle. Common approaches:\n  \
+                                 - Extract shared test utilities into a separate crate\n  \
+                                 - Move integration tests into a dedicated test crate"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Self { dag, index_map })
     }
 
     pub fn dependents(&self, pkg_id: &PackageId) -> Vec<&BuckalNode> {
@@ -193,7 +255,7 @@ impl BuckalResolve {
         self.dag
             .parents(idx)
             .iter(&self.dag)
-            .map(|(_edge, node_idx)| &self.dag[node_idx])
+            .map(|(_, node_idx)| &self.dag[node_idx])
             .collect()
     }
 
@@ -204,7 +266,7 @@ impl BuckalResolve {
         self.dag
             .children(idx)
             .iter(&self.dag)
-            .map(|(_edge, node_idx)| &self.dag[node_idx])
+            .map(|(_, node_idx)| &self.dag[node_idx])
             .collect()
     }
 
@@ -220,7 +282,7 @@ impl BuckalResolve {
         self.dag.raw_nodes().iter().map(|n| &n.weight)
     }
 
-    /// Returns `(edge_weight, child_node)` pairs for all children of the given node.
+    /// Returns `(edge_weight, child_node)` pairs for all outgoing edges of the given node.
     /// This is the primary way to iterate over a node's dependency edges with metadata.
     pub fn deps_of(&self, pkg_id: &PackageId) -> Vec<(&BuckalDep, &BuckalNode)> {
         let Some(&idx) = self.index_map.get(pkg_id) else {
@@ -247,16 +309,12 @@ impl BuckalResolve {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&node_encoded);
 
-        // Collect children, sort by PackageId for determinism
+        // Collect outgoing edges, sort by PackageId for determinism
         let mut children: Vec<_> = self
             .dag
             .children(idx)
             .iter(&self.dag)
-            .map(|(edge_idx, node_idx)| {
-                let dep = &self.dag[edge_idx];
-                let child_node = &self.dag[node_idx];
-                (&child_node.package_id, dep)
-            })
+            .map(|(edge_idx, node_idx)| (&self.dag[node_idx].package_id, &self.dag[edge_idx]))
             .collect();
         children.sort_by(|(a, _), (b, _)| a.repr.cmp(&b.repr));
 
@@ -451,7 +509,7 @@ mod tests {
     ///    \    /
     ///   common  (v1.0.0 via dep_a, v2.0.0 via dep_b)
     ///
-    /// Both versions of `common` must exist as separate nodes in the DAG.
+    /// Both versions of `common` must exist as separate nodes in the graph.
     #[test]
     fn test_diamond_dependency_version_conflict() {
         let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();

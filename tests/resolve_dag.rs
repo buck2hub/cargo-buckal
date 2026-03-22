@@ -24,6 +24,7 @@ fn resolve_from_manifest(manifest_dir: &str) -> BuckalResolve {
         .collect();
     let root_path = std::path::Path::new(metadata.workspace_root.as_str());
     BuckalResolve::from_metadata(&nodes_map, &packages_map, &HashMap::new(), root_path)
+        .expect("from_metadata should succeed for this fixture")
 }
 
 #[test]

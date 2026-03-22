@@ -79,7 +79,8 @@ impl BuckalContext {
             &packages_map,
             &checksums_map,
             buck2_root.as_std_path(),
-        );
+        )
+        .unwrap_or_exit_ctx("failed to resolve dependency graph");
 
         Self {
             root,
