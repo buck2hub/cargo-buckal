@@ -22,7 +22,7 @@ The cache is intentionally simple:
                          |
                          v
               +--------------------+
-              |   BuckalResolve    |     (DAG of BuckalNode)
+              |   BuckalResolve    |     (graph of BuckalNode)
               +--------------------+
                     |          |
                     v          v
@@ -81,7 +81,7 @@ version = 3
 
 ## Fingerprints
 
-For each `BuckalNode` in the resolved DAG, the cache stores:
+For each `BuckalNode` in the resolved dependency graph, the cache stores:
 
 ```
 fingerprint = BLAKE3(bincode(BuckalNode))
@@ -90,19 +90,23 @@ fingerprint = BLAKE3(bincode(BuckalNode))
 The `BuckalNode` struct includes all fields that affect BUCK generation:
 
 ```
-BuckalNode
+BuckalNode (node weight)
   ├── package_id, name, version, edition
   ├── features          (resolved feature set)
   ├── kind              (FirstParty { relative_path } | ThirdParty)
-  ├── deps[]            (edges with kind + platform info)
   ├── targets[]         (lib, bin, test, custom-build)
   ├── manifest_path
   ├── source, links
   └── checksum
+
+BuckalDep (edge weight)
+  ├── name              (may differ from package name if renamed)
+  └── dep_kinds[]       (kind + optional platform constraint)
 ```
 
-This means the cache changes whenever *any* of these fields change for a node — not just
-dependency edges and features (as in the previous version).
+The fingerprint for each node hashes both the `BuckalNode` and its sorted outgoing edges
+(`BuckalDep` weights + child `PackageId`). This means the cache changes whenever *any* node
+field or dependency edge changes — not just features (as in the previous version).
 
 ## Workspace canonicalization
 
@@ -127,7 +131,7 @@ Canonicalization happens when building the cache; resolution happens when diffin
 
 The cache schema is versioned via `CACHE_VERSION` in `cache.rs`.
 
-- Current version: `3` (introduced for the DAG refactor with `BuckalNode`-based fingerprinting).
+- Current version: `3` (introduced for the graph refactor with `BuckalNode`-based fingerprinting).
 - Version history:
   - `2`: Added multi-platform support.
   - `3`: Switched to `BuckalNode`-based fingerprinting (includes targets, source, checksum,
@@ -155,13 +159,15 @@ The cache schema is versioned via `CACHE_VERSION` in `cache.rs`.
 ### Construction
 
 `BuckalCache::from_resolve(resolve, workspace_root)` builds a cache by iterating all nodes in
-the `BuckalResolve` DAG, computing each node's fingerprint, and canonicalizing its `PackageId`.
+the `BuckalResolve` dependency graph, computing each node's fingerprint, and canonicalizing its `PackageId`.
 
 ### Read path
 
-`get_last_cache()` (in `utils.rs`) attempts to load the cache. If loading fails (missing,
-unparsable, or stale version), it falls back to rebuilding from current `cargo metadata` via
-`BuckalContext::new()`. If even the Buck2 root can't be discovered, it returns an empty cache.
+`get_last_cache(manifest_path)` (in `utils.rs`) attempts to load the cache. If loading fails
+(missing, unparsable, or stale version), it falls back to rebuilding from current
+`cargo metadata` via `BuckalResolve::from_metadata()`. If the rebuild itself fails (e.g.
+Buck2 root not found, `cargo metadata` error, or a dependency cycle is detected), it logs a
+warning and returns an empty cache — removal detection is disabled for that run.
 
 ### Write path
 

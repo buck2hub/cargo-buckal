@@ -221,7 +221,7 @@ mod tests {
         let node = mock_first_party_node("myroot", manifest_path, vec![lib_target]);
         let package_id = node.package_id.clone();
 
-        // Build a BuckalResolve with the node in the DAG
+        // Build a BuckalResolve with the node in the graph
         let mut dag = Dag::new();
         let idx = dag.add_node(node);
         let mut index_map = HashMap::new();
