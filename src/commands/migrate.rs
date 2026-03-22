@@ -114,6 +114,9 @@ pub fn execute(args: &MigrateArgs) {
     ctx.no_merge = !args.merge;
 
     // Process dep nodes
+    // For migrate, a missing/stale cache means "first run" — use empty so everything
+    // is treated as Added and BUCK files are generated from scratch. This differs from
+    // add/remove/update which use get_last_cache() to rebuild from metadata for diffing.
     let last_cache = if args.no_cache || BuckalCache::load().is_err() {
         BuckalCache::new_empty()
     } else {

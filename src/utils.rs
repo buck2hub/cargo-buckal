@@ -486,17 +486,91 @@ pub fn get_vendor_dir(package_id: &PackageId) -> Result<Utf8PathBuf> {
 }
 
 /// Retrieve the last saved BuckalCache from the cache file, or rebuild from metadata if unavailable.
-pub fn get_last_cache() -> BuckalCache {
+///
+/// `manifest_path` should match the `--manifest-path` argument passed to the command,
+/// so that the fallback cache is built from the correct workspace (not always cwd).
+///
+/// The fallback avoids `BuckalContext::new()` because that requires `Cargo.lock`,
+/// which may not exist yet in freshly initialized lib crates. Instead, it runs
+/// `cargo metadata` directly and passes empty checksums when the lockfile is absent.
+pub fn get_last_cache(manifest_path: Option<&str>) -> BuckalCache {
     // If the cache file loads successfully, use it.
     // Otherwise, rebuild from current metadata so that diff() can
     // detect removals (not just additions).
     BuckalCache::load().unwrap_or_else(|_| {
-        if get_buck2_root().is_err() {
-            return BuckalCache::new_empty();
+        let buck2_root = match get_buck2_root() {
+            Ok(root) => root,
+            Err(_) => {
+                buckal_warn!("could not locate buck2 root; falling back to empty cache (removal detection disabled)");
+                return BuckalCache::new_empty();
+            }
+        };
+        let mut cmd = cargo_metadata::MetadataCommand::new();
+        if let Some(path) = manifest_path {
+            cmd.manifest_path(path);
         }
-        let ctx = crate::context::BuckalContext::new(None);
-        BuckalCache::from_resolve(&ctx.resolve, &ctx.workspace_root)
+        let metadata = match cmd.exec() {
+            Ok(m) => m,
+            Err(e) => {
+                buckal_warn!("cargo metadata failed: {}; falling back to empty cache (removal detection disabled)", e);
+                return BuckalCache::new_empty();
+            }
+        };
+        let packages_map: std::collections::HashMap<_, _> = metadata
+            .packages
+            .into_iter()
+            .map(|p| (p.id.clone(), p))
+            .collect();
+        let nodes_map: std::collections::HashMap<_, _> = metadata
+            .resolve
+            .map(|r| r.nodes.into_iter().map(|n| (n.id.clone(), n)).collect())
+            .unwrap_or_default();
+        // Checksums from Cargo.lock are optional for the fallback cache —
+        // a missing lockfile (e.g. freshly initialized lib crate) should not
+        // prevent cache construction.
+        let checksums_map = read_lockfile_checksums(&metadata.workspace_root);
+        let resolve = match crate::resolve::BuckalResolve::from_metadata(
+            &nodes_map,
+            &packages_map,
+            &checksums_map,
+            buck2_root.as_std_path(),
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                buckal_warn!(
+                    "dependency cycle in workspace: {}; falling back to empty cache",
+                    e
+                );
+                return BuckalCache::new_empty();
+            }
+        };
+        BuckalCache::from_resolve(&resolve, &metadata.workspace_root)
     })
+}
+
+/// Read checksums from Cargo.lock, returning an empty map if the file is missing or unparsable.
+fn read_lockfile_checksums(
+    workspace_root: &cargo_metadata::camino::Utf8PathBuf,
+) -> std::collections::HashMap<String, String> {
+    let lock_path = workspace_root.join("Cargo.lock");
+    let lock_content = match std::fs::read_to_string(&lock_path) {
+        Ok(c) => c,
+        Err(_) => return std::collections::HashMap::new(),
+    };
+    let lock_file: cargo_util_schemas::lockfile::TomlLockfile = match toml::from_str(&lock_content)
+    {
+        Ok(l) => l,
+        Err(_) => return std::collections::HashMap::new(),
+    };
+    lock_file
+        .package
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| {
+            p.checksum
+                .map(|checksum| (format!("{}-{}", p.name, p.version), checksum))
+        })
+        .collect()
 }
 
 pub fn section(title: &str) {

@@ -43,7 +43,7 @@ pub fn execute(args: &RemoveArgs) {
 
     check_buck2_package().unwrap_or_exit();
 
-    let last_cache = get_last_cache();
+    let last_cache = get_last_cache(args.manifest_path.as_deref());
 
     if args.workspace {
         section("Buckal Console");

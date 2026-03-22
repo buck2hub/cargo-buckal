@@ -49,7 +49,7 @@ pub fn execute(args: &AddArgs) {
 
     check_buck2_package().unwrap_or_exit();
 
-    let last_cache = get_last_cache();
+    let last_cache = get_last_cache(args.manifest_path.as_deref());
 
     if args.workspace {
         // TODO: Check current implementation of workspace mode
