@@ -276,12 +276,26 @@ impl BuckalResolve {
             .collect()
     }
 
+    /// Find a node by crate name and optional version. When `version` is `None`
+    /// and multiple versions exist, returns the highest semver version for
+    /// determinism (node insertion order depends on `HashMap` iteration).
     pub fn find_by_name(&self, name: &str, version: Option<&str>) -> Option<&BuckalNode> {
-        self.dag
+        let mut matches = self
+            .dag
             .raw_nodes()
             .iter()
             .map(|n| &n.weight)
-            .find(|node| node.name == name && version.is_none_or(|v| node.version == v))
+            .filter(|node| node.name == name && version.is_none_or(|v| node.version == v));
+
+        if version.is_some() {
+            return matches.next();
+        }
+
+        matches.max_by(|a, b| {
+            let va = semver::Version::parse(&a.version).ok();
+            let vb = semver::Version::parse(&b.version).ok();
+            va.cmp(&vb)
+        })
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = &BuckalNode> {
