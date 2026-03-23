@@ -218,6 +218,12 @@ impl BuckalResolve {
                         if dev_kinds.is_empty() {
                             continue;
                         }
+                        // If a non-dev edge already exists (from Pass 1), merge
+                        // dev dep_kinds into it to avoid duplicate edges.
+                        if let Some(edge_idx) = dag.find_edge(parent_idx, child_idx) {
+                            dag[edge_idx].dep_kinds.extend(dev_kinds);
+                            continue;
+                        }
                         let buckal_dep = BuckalDep {
                             name: dep.name.clone(),
                             dep_kinds: dev_kinds,
@@ -778,6 +784,87 @@ mod tests {
         assert_ne!(
             fp2, fp3,
             "different edge metadata should change the fingerprint"
+        );
+    }
+
+    /// When a package is both a normal and dev dependency of the same parent,
+    /// `from_metadata()` should merge dep_kinds onto a single edge rather than
+    /// creating parallel edges. This ensures `dependencies()` and `dependents()`
+    /// return each node exactly once.
+    #[test]
+    fn test_normal_and_dev_dep_merged_into_single_edge() {
+        let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut index_map = HashMap::new();
+
+        let node_a = make_node("a", "1.0.0");
+        let node_b = make_node("b", "1.0.0");
+
+        let idx_a = dag.add_node(node_a.clone());
+        let idx_b = dag.add_node(node_b.clone());
+
+        index_map.insert(node_a.package_id.clone(), idx_a);
+        index_map.insert(node_b.package_id.clone(), idx_b);
+
+        // Simulate what from_metadata does: add normal dep in pass 1
+        dag.add_edge(
+            idx_a,
+            idx_b,
+            make_dep_with_kind("b", DependencyKind::Normal),
+        )
+        .unwrap();
+
+        // Pass 2: merge dev dep_kinds into existing edge instead of adding parallel edge
+        if let Some(edge_idx) = dag.find_edge(idx_a, idx_b) {
+            dag[edge_idx].dep_kinds.push(BuckalDepKind {
+                kind: DependencyKind::Development,
+                target: None,
+            });
+        }
+
+        let resolve = BuckalResolve { dag, index_map };
+
+        // dependencies() should return b exactly once (not duplicated)
+        let a_deps = resolve.dependencies(&make_pkg_id("a"));
+        assert_eq!(
+            a_deps.len(),
+            1,
+            "expected 1 dependency, got {}",
+            a_deps.len()
+        );
+        assert_eq!(a_deps[0].name, "b");
+
+        // dependents() should return a exactly once
+        let b_dependents = resolve.dependents(&make_pkg_id("b"));
+        assert_eq!(
+            b_dependents.len(),
+            1,
+            "expected 1 dependent, got {}",
+            b_dependents.len()
+        );
+        assert_eq!(b_dependents[0].name, "a");
+
+        // deps_of() should return a single edge with both dep_kinds
+        let a_deps_of = resolve.deps_of(&make_pkg_id("a"));
+        assert_eq!(
+            a_deps_of.len(),
+            1,
+            "expected 1 edge, got {}",
+            a_deps_of.len()
+        );
+        assert_eq!(a_deps_of[0].0.dep_kinds.len(), 2);
+        assert!(
+            a_deps_of[0]
+                .0
+                .dep_kinds
+                .iter()
+                .any(|dk| dk.kind == DependencyKind::Normal)
+        );
+        assert!(
+            a_deps_of[0]
+                .0
+                .dep_kinds
+                .iter()
+                .any(|dk| dk.kind == DependencyKind::Development)
         );
     }
 }
