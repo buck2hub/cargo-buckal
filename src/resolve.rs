@@ -228,6 +228,15 @@ impl BuckalResolve {
                             name: dep.name.clone(),
                             dep_kinds: dev_kinds,
                         };
+                        // NOTE: We are intentionally stricter than Cargo here. Cargo
+                        // allows dev-dependency cycles, and Buck2 *could* represent
+                        // them acyclically because dev deps only appear on rust_test
+                        // targets (see dep_kind_matches in buckify/deps.rs and
+                        // buckify_root_node in buckify/rules.rs). If we want to relax
+                        // this in the future: (1) skip cycle detection for dev-only
+                        // edges here, and (2) ensure downstream consumers correctly
+                        // scope dev edges to test targets only.
+                        // See: https://github.com/buck2hub/cargo-buckal/pull/75#discussion_r2975238783
                         if dag.add_edge(parent_idx, child_idx, buckal_dep).is_err() {
                             let parent_name = &dag[parent_idx].name;
                             let child_name = &dag[child_idx].name;

@@ -19,6 +19,10 @@ pub(super) fn dep_kind_matches(target_kind: CargoTargetKind, dep_kind: Dependenc
     match target_kind {
         CargoTargetKind::CustomBuild => dep_kind == DependencyKind::Build,
         // Cargo test targets can depend on both dev-deps and regular deps.
+        // NOTE: Because dev deps are scoped to test targets here, dev-dependency
+        // cycles *could* lower to acyclic Buck2 graphs. However, resolve.rs
+        // currently rejects all dev-dependency cycles at DAG construction time.
+        // See resolve.rs from_metadata() Pass 2 if relaxing that restriction.
         CargoTargetKind::Test => {
             dep_kind == DependencyKind::Development || dep_kind == DependencyKind::Normal
         }

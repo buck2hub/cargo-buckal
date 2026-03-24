@@ -174,7 +174,12 @@ pub fn buckify_root_node(node: &BuckalNode, ctx: &BuckalContext) -> Vec<Rule> {
         }
     }
 
-    // emit buck rules for integration test
+    // Emit buck rules for integration tests.
+    // NOTE: Dev deps are emitted only on these rust_test targets (via
+    // dep_kind_matches). This scoping means dev-dependency cycles could
+    // theoretically produce acyclic Buck2 graphs. The current policy is to
+    // reject them at DAG construction time — see resolve.rs from_metadata()
+    // Pass 2. Update that code if relaxing the restriction.
     if !ctx.repo_config.ignore_tests {
         for test_target in &test_targets {
             let buckal_name = test_target.name.to_owned();
