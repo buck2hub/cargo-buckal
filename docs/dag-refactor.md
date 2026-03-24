@@ -63,7 +63,7 @@ cargo metadata ──> BuckalResolve::from_metadata()
    │                              &BuckalNode)]│
    │     .find_by_name(name) -> [&BuckalNode]  │
    │     .nodes()            -> iter           │
-   │     .fingerprint_of(id) -> Fingerprint    │
+   │     .fingerprint_of(id, ws) -> Fingerprint │
    └──────────────────────────────────────────┘
                     |
                     v
@@ -129,7 +129,7 @@ Methods:
 | `deps_of(pkg_id)` | `(edge_weight, child_node)` pairs for iterating with metadata |
 | `find_by_name(name, version)` | Find a node by crate name and optional version |
 | `nodes()` | Iterator over all nodes |
-| `fingerprint_of(pkg_id)` | Deterministic fingerprint covering node + edges |
+| `fingerprint_of(pkg_id, workspace_root)` | Location-independent fingerprint covering node + edges |
 
 ### Updated `BuckalContext`
 
@@ -185,9 +185,11 @@ directory module.
 ### Cache changes
 
 - Cache version bumped from 2 to 3.
-- Fingerprints are computed by `BuckalResolve::fingerprint_of()`, which hashes the `BuckalNode`
-  intrinsic fields (targets, source, checksum, edition, links, kind) plus all outgoing edge
-  weights (`BuckalDep`) and child `PackageId`s, sorted for determinism.
+- Fingerprints are computed by `BuckalResolve::fingerprint_of()`, which hashes individual
+  `BuckalNode` fields selectively (excluding absolute `manifest_path`, normalizing
+  `targets[*].src_path` to relative, canonicalizing `PackageId` via `PackageIdExt`) plus
+  all outgoing edge weights (`BuckalDep`) and canonicalized child `PackageId`s, sorted for
+  determinism. This ensures fingerprints are portable across checkout locations.
 - Old caches (version < 3) are silently discarded and rebuilt.
 - Future caches (version > 3) produce an error prompting the user to upgrade.
 

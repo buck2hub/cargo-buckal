@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use cargo_buckal::cache::{BuckalCache, ChangeType};
 use cargo_buckal::resolve::{BuckalNode, BuckalResolve, NodeKind};
+use cargo_metadata::camino::Utf8PathBuf;
 use cargo_metadata::{MetadataCommand, PackageId};
 
 /// Helper: build a BuckalResolve from cargo metadata at `manifest_dir`.
@@ -469,9 +470,10 @@ fn test_diamond_deps_version_conflict() {
     assert!(found_new.version.starts_with("1."));
 
     // Fingerprints of the two itoa versions must differ
+    let ws_root = Utf8PathBuf::from("/tmp");
     assert_ne!(
-        resolve.fingerprint_of(&itoa_old_node.package_id),
-        resolve.fingerprint_of(&itoa_new_node.package_id),
+        resolve.fingerprint_of(&itoa_old_node.package_id, &ws_root),
+        resolve.fingerprint_of(&itoa_new_node.package_id, &ws_root),
         "different itoa versions should have different fingerprints"
     );
 

@@ -81,32 +81,39 @@ version = 3
 
 ## Fingerprints
 
-For each `BuckalNode` in the resolved dependency graph, the cache stores:
+For each `BuckalNode` in the resolved dependency graph, the cache stores a
+location-independent fingerprint:
 
 ```
-fingerprint = BLAKE3(bincode(BuckalNode))
+fingerprint = BLAKE3(field-by-field hash of BuckalNode + sorted outgoing edges)
 ```
 
-The `BuckalNode` struct includes all fields that affect BUCK generation:
+The fingerprint hashes individual fields selectively to ensure portability across
+different checkout locations:
 
 ```
 BuckalNode (node weight)
-  ├── package_id, name, version, edition
-  ├── features          (resolved feature set)
-  ├── kind              (FirstParty { relative_path } | ThirdParty)
-  ├── targets[]         (lib, bin, test, custom-build)
-  ├── manifest_path
+  ├── package_id         (canonicalized: workspace root → ($WORKSPACE) placeholder)
+  ├── name, version, edition
+  ├── features           (sorted for determinism)
+  ├── kind               (FirstParty { relative_path } | ThirdParty)
+  ├── targets[]          (name, kind, relative src_path, doctest, test)
   ├── source, links
   └── checksum
+
+  Excluded: manifest_path (absolute; identity captured by kind + name/version/checksum)
+  Normalized: targets[*].src_path (relativized against manifest_dir)
+  Normalized: package_id (canonicalized via PackageIdExt)
 
 BuckalDep (edge weight)
   ├── name              (may differ from package name if renamed)
   └── dep_kinds[]       (kind + optional platform constraint)
 ```
 
-The fingerprint for each node hashes both the `BuckalNode` and its sorted outgoing edges
-(`BuckalDep` weights + child `PackageId`). This means the cache changes whenever *any* node
-field or dependency edge changes — not just features (as in the previous version).
+The fingerprint for each node hashes the fields above plus its sorted outgoing edges
+(`BuckalDep` weights + canonicalized child `PackageId`). This means the cache changes
+whenever *any* node field or dependency edge changes — not just features (as in the
+previous version).
 
 ## Workspace canonicalization
 

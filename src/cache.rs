@@ -111,7 +111,7 @@ impl BuckalCache {
             .map(|node| {
                 (
                     node.package_id.canonicalize(workspace_root),
-                    resolve.fingerprint_of(&node.package_id),
+                    resolve.fingerprint_of(&node.package_id, workspace_root),
                 )
             })
             .collect();

@@ -6,7 +6,7 @@ use cargo_metadata::{DependencyKind, Edition, PackageId, TargetKind, camino::Utf
 use daggy::{Dag, NodeIndex, Walker};
 use serde::{Deserialize, Serialize};
 
-use crate::cache::Fingerprint;
+use crate::cache::{Fingerprint, PackageIdExt};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeKind {
@@ -324,34 +324,115 @@ impl BuckalResolve {
             .collect()
     }
 
-    /// Compute a deterministic fingerprint for the given package.
+    /// Compute a deterministic, location-independent fingerprint for the given package.
     ///
-    /// The fingerprint covers the node's intrinsic properties plus all outgoing
-    /// dependency edges (sorted by child `PackageId` for determinism).
-    pub fn fingerprint_of(&self, pkg_id: &PackageId) -> Fingerprint {
+    /// The fingerprint covers the node's intrinsic properties (excluding absolute paths
+    /// like `manifest_path` and `targets[*].src_path`) plus all outgoing dependency edges
+    /// (sorted by canonicalized child `PackageId` for determinism).
+    ///
+    /// `workspace_root` is used to canonicalize `PackageId` values for path dependencies
+    /// so that the same project checked out at different locations produces identical
+    /// fingerprints.
+    pub fn fingerprint_of(&self, pkg_id: &PackageId, workspace_root: &Utf8PathBuf) -> Fingerprint {
         let idx = self.index_map[pkg_id];
         let node = &self.dag[idx];
-
-        // Hash the node's intrinsic properties
-        let node_encoded = bincode::serde::encode_to_vec(node, bincode::config::standard())
-            .expect("Serialization failed");
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&node_encoded);
 
-        // Collect outgoing edges, sort by PackageId for determinism
+        // 1. Package identity — canonicalize to remove absolute workspace path
+        let canonical_id = node.package_id.canonicalize(workspace_root);
+        hasher.update(canonical_id.repr.as_bytes());
+
+        // 2. Stable scalar fields
+        hasher.update(node.name.as_bytes());
+        hasher.update(node.version.as_bytes());
+        hasher.update(node.edition.to_string().as_bytes());
+
+        // 3. Features (sorted — cargo metadata doesn't guarantee order)
+        let mut sorted_features = node.features.clone();
+        sorted_features.sort();
+        for f in &sorted_features {
+            hasher.update(f.as_bytes());
+        }
+
+        // 4. NodeKind (FirstParty already stores relative_path)
+        match &node.kind {
+            NodeKind::FirstParty { relative_path } => {
+                hasher.update(b"first_party");
+                hasher.update(relative_path.as_bytes());
+            }
+            NodeKind::ThirdParty => {
+                hasher.update(b"third_party");
+            }
+        }
+
+        // 5. Targets — hash name, kind, relative src_path, doctest, test
+        //    Skip absolute src_path; relativize against manifest_dir
+        let manifest_dir = node.manifest_path.parent().unwrap_or(&node.manifest_path);
+        for target in &node.targets {
+            hasher.update(target.name.as_bytes());
+            let kind_encoded =
+                bincode::serde::encode_to_vec(&target.kind, bincode::config::standard())
+                    .expect("Serialization failed");
+            hasher.update(&kind_encoded);
+            let rel_src = target
+                .src_path
+                .strip_prefix(manifest_dir)
+                .unwrap_or(&target.src_path);
+            hasher.update(rel_src.as_str().as_bytes());
+            hasher.update(&[target.doctest as u8]);
+            hasher.update(&[target.test as u8]);
+        }
+
+        // 6. Optional fields with discriminant bytes to prevent boundary collisions
+        match &node.source {
+            Some(src) => {
+                hasher.update(&[1u8]);
+                hasher.update(src.as_bytes());
+            }
+            None => {
+                hasher.update(&[0u8]);
+            }
+        }
+        match &node.links {
+            Some(links) => {
+                hasher.update(&[1u8]);
+                hasher.update(links.as_bytes());
+            }
+            None => {
+                hasher.update(&[0u8]);
+            }
+        }
+        match &node.checksum {
+            Some(checksum) => {
+                hasher.update(&[1u8]);
+                hasher.update(checksum.as_bytes());
+            }
+            None => {
+                hasher.update(&[0u8]);
+            }
+        }
+
+        // 7. manifest_path is intentionally skipped — identity is captured by
+        //    kind.relative_path (first-party) or name+version+checksum (third-party)
+
+        // 8. Outgoing edges — canonicalize child PackageId.repr
         let mut children: Vec<_> = self
             .dag
             .children(idx)
             .iter(&self.dag)
-            .map(|(edge_idx, node_idx)| (&self.dag[node_idx].package_id, &self.dag[edge_idx]))
+            .map(|(edge_idx, node_idx)| {
+                let child_canonical = self.dag[node_idx].package_id.canonicalize(workspace_root);
+                (child_canonical, edge_idx)
+            })
             .collect();
         children.sort_by(|(a, _), (b, _)| a.repr.cmp(&b.repr));
 
-        for (child_pkg_id, dep) in children {
-            let dep_encoded = bincode::serde::encode_to_vec(dep, bincode::config::standard())
-                .expect("Serialization failed");
+        for (child_canonical_id, edge_idx) in &children {
+            let dep_encoded =
+                bincode::serde::encode_to_vec(&self.dag[*edge_idx], bincode::config::standard())
+                    .expect("Serialization failed");
             hasher.update(&dep_encoded);
-            hasher.update(child_pkg_id.repr.as_bytes());
+            hasher.update(child_canonical_id.repr.as_bytes());
         }
 
         Fingerprint::new(hasher.finalize().into())
@@ -361,6 +442,10 @@ impl BuckalResolve {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_workspace_root() -> Utf8PathBuf {
+        Utf8PathBuf::from("/tmp")
+    }
 
     fn make_pkg_id(name: &str) -> PackageId {
         PackageId {
@@ -519,14 +604,14 @@ mod tests {
 
         // Same data -> same fingerprint
         assert_eq!(
-            resolve1.fingerprint_of(&node1.package_id),
-            resolve2.fingerprint_of(&node2.package_id)
+            resolve1.fingerprint_of(&node1.package_id, &test_workspace_root()),
+            resolve2.fingerprint_of(&node2.package_id, &test_workspace_root())
         );
 
         // Different version -> different fingerprint
         assert_ne!(
-            resolve1.fingerprint_of(&node1.package_id),
-            resolve3.fingerprint_of(&node3.package_id)
+            resolve1.fingerprint_of(&node1.package_id, &test_workspace_root()),
+            resolve3.fingerprint_of(&node3.package_id, &test_workspace_root())
         );
     }
 
@@ -641,8 +726,8 @@ mod tests {
 
         // Fingerprints of common@1.0.0 and common@2.0.0 must differ
         assert_ne!(
-            resolve.fingerprint_of(&common_v1_id),
-            resolve.fingerprint_of(&common_v2_id),
+            resolve.fingerprint_of(&common_v1_id, &test_workspace_root()),
+            resolve.fingerprint_of(&common_v2_id, &test_workspace_root()),
             "different versions should produce different fingerprints"
         );
     }
@@ -793,9 +878,9 @@ mod tests {
             index_map: index_map3,
         };
 
-        let fp1 = resolve1.fingerprint_of(&make_pkg_id("a"));
-        let fp2 = resolve2.fingerprint_of(&make_pkg_id("a"));
-        let fp3 = resolve3.fingerprint_of(&make_pkg_id("a"));
+        let fp1 = resolve1.fingerprint_of(&make_pkg_id("a"), &test_workspace_root());
+        let fp2 = resolve2.fingerprint_of(&make_pkg_id("a"), &test_workspace_root());
+        let fp3 = resolve3.fingerprint_of(&make_pkg_id("a"), &test_workspace_root());
 
         // Adding a dep changes the fingerprint
         assert_ne!(
@@ -888,6 +973,140 @@ mod tests {
                 .dep_kinds
                 .iter()
                 .any(|dk| dk.kind == DependencyKind::Development)
+        );
+    }
+
+    /// First-party nodes at different checkout locations should produce identical fingerprints.
+    #[test]
+    fn test_fingerprint_portable_across_paths() {
+        // Node checked out at /home/alice/project
+        let alice_root = Utf8PathBuf::from("/home/alice/project");
+        let mut node_alice = BuckalNode {
+            package_id: PackageId {
+                repr: "path+file:///home/alice/project#foo@1.0.0".to_string(),
+            },
+            name: "foo".to_string(),
+            version: "1.0.0".to_string(),
+            features: vec![],
+            kind: NodeKind::FirstParty {
+                relative_path: "".to_string(),
+            },
+            edition: Edition::E2021,
+            manifest_path: Utf8PathBuf::from("/home/alice/project/Cargo.toml"),
+            targets: vec![BuckalTarget {
+                name: "foo".to_string(),
+                kind: vec![TargetKind::Lib],
+                src_path: Utf8PathBuf::from("/home/alice/project/src/lib.rs"),
+                doctest: true,
+                test: true,
+            }],
+            source: None,
+            links: None,
+            checksum: None,
+        };
+
+        let mut dag1 = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut map1 = HashMap::new();
+        let idx1 = dag1.add_node(node_alice.clone());
+        map1.insert(node_alice.package_id.clone(), idx1);
+        let resolve1 = BuckalResolve {
+            dag: dag1,
+            index_map: map1,
+        };
+
+        // Same node checked out at /home/bob/work/project
+        let bob_root = Utf8PathBuf::from("/home/bob/work/project");
+        node_alice.package_id = PackageId {
+            repr: "path+file:///home/bob/work/project#foo@1.0.0".to_string(),
+        };
+        node_alice.manifest_path = Utf8PathBuf::from("/home/bob/work/project/Cargo.toml");
+        node_alice.targets[0].src_path = Utf8PathBuf::from("/home/bob/work/project/src/lib.rs");
+
+        let mut dag2 = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut map2 = HashMap::new();
+        let idx2 = dag2.add_node(node_alice.clone());
+        map2.insert(node_alice.package_id.clone(), idx2);
+        let resolve2 = BuckalResolve {
+            dag: dag2,
+            index_map: map2,
+        };
+
+        let fp_alice = resolve1.fingerprint_of(
+            &PackageId {
+                repr: "path+file:///home/alice/project#foo@1.0.0".to_string(),
+            },
+            &alice_root,
+        );
+        let fp_bob = resolve2.fingerprint_of(&node_alice.package_id, &bob_root);
+
+        assert_eq!(
+            fp_alice, fp_bob,
+            "fingerprints should be portable across checkout locations"
+        );
+    }
+
+    /// Third-party nodes with different ~/.cargo registry paths should produce identical fingerprints.
+    #[test]
+    fn test_fingerprint_portable_third_party() {
+        let make_third_party = |cargo_home: &str| -> (BuckalNode, Utf8PathBuf) {
+            let node = BuckalNode {
+                package_id: PackageId {
+                    repr: "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.200"
+                        .to_string(),
+                },
+                name: "serde".to_string(),
+                version: "1.0.200".to_string(),
+                features: vec!["derive".to_string(), "std".to_string()],
+                kind: NodeKind::ThirdParty,
+                edition: Edition::E2021,
+                manifest_path: Utf8PathBuf::from(format!(
+                    "{}/.cargo/registry/src/index.crates.io/serde-1.0.200/Cargo.toml",
+                    cargo_home
+                )),
+                targets: vec![BuckalTarget {
+                    name: "serde".to_string(),
+                    kind: vec![TargetKind::Lib],
+                    src_path: Utf8PathBuf::from(format!(
+                        "{}/.cargo/registry/src/index.crates.io/serde-1.0.200/src/lib.rs",
+                        cargo_home
+                    )),
+                    doctest: true,
+                    test: true,
+                }],
+                source: Some("registry+https://github.com/rust-lang/crates.io-index".to_string()),
+                links: None,
+                checksum: Some("abc123".to_string()),
+            };
+            (node, Utf8PathBuf::from(format!("{}/project", cargo_home)))
+        };
+
+        let (node1, root1) = make_third_party("/home/alice");
+        let (node2, root2) = make_third_party("/home/bob");
+
+        let mut dag1 = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut map1 = HashMap::new();
+        let idx1 = dag1.add_node(node1.clone());
+        map1.insert(node1.package_id.clone(), idx1);
+        let resolve1 = BuckalResolve {
+            dag: dag1,
+            index_map: map1,
+        };
+
+        let mut dag2 = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut map2 = HashMap::new();
+        let idx2 = dag2.add_node(node2.clone());
+        map2.insert(node2.package_id.clone(), idx2);
+        let resolve2 = BuckalResolve {
+            dag: dag2,
+            index_map: map2,
+        };
+
+        let fp1 = resolve1.fingerprint_of(&node1.package_id, &root1);
+        let fp2 = resolve2.fingerprint_of(&node2.package_id, &root2);
+
+        assert_eq!(
+            fp1, fp2,
+            "third-party fingerprints should be portable across different cargo homes"
         );
     }
 }
