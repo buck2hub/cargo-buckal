@@ -24,7 +24,7 @@ fn resolve_from_manifest(manifest_dir: &str) -> BuckalResolve {
         .map(|n| (n.id.clone(), n))
         .collect();
     let root_path = std::path::Path::new(metadata.workspace_root.as_str());
-    BuckalResolve::from_metadata(&nodes_map, &packages_map, &HashMap::new(), root_path)
+    BuckalResolve::from_metadata(&nodes_map, &packages_map, &HashMap::new(), root_path, false)
         .expect("from_metadata should succeed for this fixture")
 }
 
@@ -667,7 +667,7 @@ fn test_dev_dependency_cycle() {
     let root_path = std::path::Path::new(metadata.workspace_root.as_str());
 
     let result =
-        BuckalResolve::from_metadata(&nodes_map, &packages_map, &HashMap::new(), root_path);
+        BuckalResolve::from_metadata(&nodes_map, &packages_map, &HashMap::new(), root_path, false);
 
     let err_msg = result
         .err()
@@ -774,9 +774,14 @@ fn test_resolve_without_lockfile() {
         .collect();
 
     // Build resolve with empty checksums (no Cargo.lock available)
-    let resolve =
-        BuckalResolve::from_metadata(&nodes_map, &packages_map, &HashMap::new(), tmp.path())
-            .expect("from_metadata should succeed for a single-crate project");
+    let resolve = BuckalResolve::from_metadata(
+        &nodes_map,
+        &packages_map,
+        &HashMap::new(),
+        tmp.path(),
+        false,
+    )
+    .expect("from_metadata should succeed for a single-crate project");
 
     // Should have the one local package
     let node = resolve
@@ -989,7 +994,7 @@ fn test_dev_dev_cycle_rejected() {
     let root_path = std::path::Path::new(metadata.workspace_root.as_str());
 
     let result =
-        BuckalResolve::from_metadata(&nodes_map, &packages_map, &HashMap::new(), root_path);
+        BuckalResolve::from_metadata(&nodes_map, &packages_map, &HashMap::new(), root_path, false);
 
     let err_msg = result
         .err()

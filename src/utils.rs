@@ -534,6 +534,7 @@ pub fn get_last_cache(manifest_path: Option<&str>) -> BuckalCache {
             &packages_map,
             &checksums_map,
             buck2_root.as_std_path(),
+            true, // lenient: skip dev-dep cycles so all nodes remain for removal detection
         ) {
             Ok(r) => r,
             Err(e) => {

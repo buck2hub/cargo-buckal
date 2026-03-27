@@ -98,11 +98,16 @@ impl BuckalResolve {
     /// Uses `daggy::Dag` which enforces acyclicity. Edges are inserted in two passes:
     /// first normal/build deps, then dev deps. Returns an error if any edge would form
     /// a cycle — Buck2 requires a strictly acyclic dependency graph.
+    ///
+    /// When `lenient` is `true`, dev-dependency cycles are silently skipped instead of
+    /// causing a hard error. This is used by the cache fallback path where having all
+    /// nodes (for removal detection) matters more than strict edge accuracy.
     pub fn from_metadata(
         nodes_map: &HashMap<PackageId, cargo_metadata::Node>,
         packages_map: &HashMap<PackageId, cargo_metadata::Package>,
         checksums_map: &HashMap<String, String>,
         root_path: &std::path::Path,
+        lenient: bool,
     ) -> anyhow::Result<Self> {
         let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
         let mut index_map = HashMap::new();
@@ -218,9 +223,13 @@ impl BuckalResolve {
                         if dev_kinds.is_empty() {
                             continue;
                         }
-                        // If a non-dev edge already exists (from Pass 1), merge
-                        // dev dep_kinds into it to avoid duplicate edges.
-                        if let Some(edge_idx) = dag.find_edge(parent_idx, child_idx) {
+                        // If a non-dev edge already exists (from Pass 1) with the
+                        // same name, merge dev dep_kinds into it to avoid duplicate
+                        // edges. If the name differs (renamed dev-dep alias), fall
+                        // through to add a separate edge so the alias is preserved.
+                        if let Some(edge_idx) = dag.find_edge(parent_idx, child_idx)
+                            && dag[edge_idx].name == dep.name
+                        {
                             dag[edge_idx].dep_kinds.extend(dev_kinds);
                             continue;
                         }
@@ -240,6 +249,11 @@ impl BuckalResolve {
                         if dag.add_edge(parent_idx, child_idx, buckal_dep).is_err() {
                             let parent_name = &dag[parent_idx].name;
                             let child_name = &dag[child_idx].name;
+                            if lenient {
+                                // In lenient mode (cache fallback), skip the cyclic
+                                // dev edge so we still have all nodes for diffing.
+                                continue;
+                            }
                             bail!(
                                 "dev-dependency cycle detected: {parent_name} -> {child_name}\n\
                                  \n\
@@ -974,6 +988,96 @@ mod tests {
                 .iter()
                 .any(|dk| dk.kind == DependencyKind::Development)
         );
+    }
+
+    /// When a package appears as a normal dep under one name and a dev-dep under
+    /// a different (renamed) alias, Pass 2 must create a separate edge instead of
+    /// merging into the existing one. This preserves the alias for downstream BUCK
+    /// rule generation (resolve_dep_label uses dep.name to detect renames).
+    ///
+    /// Example Cargo.toml:
+    ///   [dependencies]
+    ///   foo = "1.0"
+    ///   [dev-dependencies]
+    ///   bar = { package = "foo", version = "1.0" }
+    #[test]
+    fn test_renamed_dev_dep_preserves_separate_edge() {
+        let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut index_map = HashMap::new();
+
+        let node_a = make_node("a", "1.0.0");
+        let node_foo = make_node("foo", "1.0.0");
+
+        let idx_a = dag.add_node(node_a.clone());
+        let idx_foo = dag.add_node(node_foo.clone());
+
+        index_map.insert(node_a.package_id.clone(), idx_a);
+        index_map.insert(node_foo.package_id.clone(), idx_foo);
+
+        // Pass 1: normal dep named "foo"
+        dag.add_edge(
+            idx_a,
+            idx_foo,
+            make_dep_with_kind("foo", DependencyKind::Normal),
+        )
+        .unwrap();
+
+        // Pass 2: dev dep with renamed alias "bar" pointing to the same package.
+        // Because the name differs, this must NOT merge into the existing edge.
+        if let Some(edge_idx) = dag.find_edge(idx_a, idx_foo)
+            && dag[edge_idx].name == "bar"
+        {
+            dag[edge_idx].dep_kinds.push(BuckalDepKind {
+                kind: DependencyKind::Development,
+                target: None,
+            });
+        } else {
+            // Name doesn't match — add a separate edge (what the fix does)
+            dag.add_edge(
+                idx_a,
+                idx_foo,
+                make_dep_with_kind("bar", DependencyKind::Development),
+            )
+            .unwrap();
+        }
+
+        let resolve = BuckalResolve { dag, index_map };
+
+        // deps_of should return TWO edges: "foo" (Normal) and "bar" (Dev)
+        let a_deps = resolve.deps_of(&make_pkg_id("a"));
+        assert_eq!(a_deps.len(), 2, "expected 2 edges, got {}", a_deps.len());
+
+        let edge_names: Vec<&str> = a_deps.iter().map(|(dep, _)| dep.name.as_str()).collect();
+        assert!(
+            edge_names.contains(&"foo"),
+            "expected edge named 'foo', got {:?}",
+            edge_names
+        );
+        assert!(
+            edge_names.contains(&"bar"),
+            "expected edge named 'bar', got {:?}",
+            edge_names
+        );
+
+        // The "foo" edge should be Normal only
+        let foo_edge = a_deps.iter().find(|(dep, _)| dep.name == "foo").unwrap();
+        assert_eq!(foo_edge.0.dep_kinds.len(), 1);
+        assert!(matches!(
+            foo_edge.0.dep_kinds[0].kind,
+            DependencyKind::Normal
+        ));
+
+        // The "bar" edge should be Dev only
+        let bar_edge = a_deps.iter().find(|(dep, _)| dep.name == "bar").unwrap();
+        assert_eq!(bar_edge.0.dep_kinds.len(), 1);
+        assert!(matches!(
+            bar_edge.0.dep_kinds[0].kind,
+            DependencyKind::Development
+        ));
+
+        // Both edges point to the same node
+        assert_eq!(foo_edge.1.name, "foo");
+        assert_eq!(bar_edge.1.name, "foo");
     }
 
     /// First-party nodes at different checkout locations should produce identical fingerprints.
