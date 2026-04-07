@@ -119,9 +119,10 @@ impl BuckalChange {
                 Vec::new()
             };
             let export_file = Rule::ExportFile(emit_export_file());
-            if let Some(existing) = rules.iter_mut().find(|r| {
-                matches!(r, Rule::ExportFile(ef) if ef.name == "workspace")
-            }) {
+            if let Some(existing) = rules
+                .iter_mut()
+                .find(|r| matches!(r, Rule::ExportFile(ef) if ef.name == "workspace"))
+            {
                 *existing = export_file;
             } else {
                 rules.push(export_file);
