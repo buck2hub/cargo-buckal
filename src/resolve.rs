@@ -467,8 +467,10 @@ impl BuckalResolve {
         // 10. Version patch config for child dependencies — if any direct child
         //     is affected by a version patch, include that patch in the parent's
         //     fingerprint so dependents are invalidated when patches change.
-        for (_, node_idx) in self.dag.children(idx).iter(&self.dag) {
-            let child_node = &self.dag[node_idx];
+        //     Reuse the already-sorted `children` list for deterministic hashing.
+        for (_, edge_idx) in &children {
+            let (_, child_idx) = self.dag.edge_endpoints(*edge_idx).unwrap();
+            let child_node = &self.dag[child_idx];
             if let Some(vp) = patch_config.version.get(&child_node.name) {
                 hasher.update(b"child_version_patch");
                 hasher.update(child_node.name.as_bytes());
@@ -1257,6 +1259,82 @@ mod tests {
         assert_eq!(
             fp_alice, fp_bob,
             "fingerprints should be portable across checkout locations"
+        );
+    }
+
+    /// Child version patches must produce the same fingerprint regardless of the
+    /// order children are inserted into the DAG, since step 10 should iterate
+    /// the already-sorted child list.
+    #[test]
+    fn test_child_patch_fingerprint_stable_across_insertion_order() {
+        let patch_config = RepoPatchConfig {
+            version: [
+                (
+                    "alpha".to_string(),
+                    crate::config::VersionPatch {
+                        from: "1.0.0".to_string(),
+                        to: "2.0.0".to_string(),
+                    },
+                ),
+                (
+                    "beta".to_string(),
+                    crate::config::VersionPatch {
+                        from: "1.0.0".to_string(),
+                        to: "3.0.0".to_string(),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        };
+
+        // Graph 1: insert alpha before beta
+        let mut dag1 = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut map1 = HashMap::new();
+        let parent1 = make_node("parent", "1.0.0");
+        let alpha1 = make_node("alpha", "1.0.0");
+        let beta1 = make_node("beta", "1.0.0");
+        let idx_p1 = dag1.add_node(parent1.clone());
+        let idx_a1 = dag1.add_node(alpha1.clone());
+        let idx_b1 = dag1.add_node(beta1.clone());
+        map1.insert(parent1.package_id.clone(), idx_p1);
+        map1.insert(alpha1.package_id.clone(), idx_a1);
+        map1.insert(beta1.package_id.clone(), idx_b1);
+        dag1.add_edge(idx_p1, idx_a1, make_dep("alpha")).unwrap();
+        dag1.add_edge(idx_p1, idx_b1, make_dep("beta")).unwrap();
+        let resolve1 = BuckalResolve {
+            dag: dag1,
+            index_map: map1,
+        };
+
+        // Graph 2: insert beta before alpha (reversed insertion order)
+        let mut dag2 = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut map2 = HashMap::new();
+        let parent2 = make_node("parent", "1.0.0");
+        let beta2 = make_node("beta", "1.0.0");
+        let alpha2 = make_node("alpha", "1.0.0");
+        let idx_p2 = dag2.add_node(parent2.clone());
+        let idx_b2 = dag2.add_node(beta2.clone());
+        let idx_a2 = dag2.add_node(alpha2.clone());
+        map2.insert(parent2.package_id.clone(), idx_p2);
+        map2.insert(beta2.package_id.clone(), idx_b2);
+        map2.insert(alpha2.package_id.clone(), idx_a2);
+        // Add edges in reversed order
+        dag2.add_edge(idx_p2, idx_b2, make_dep("beta")).unwrap();
+        dag2.add_edge(idx_p2, idx_a2, make_dep("alpha")).unwrap();
+        let resolve2 = BuckalResolve {
+            dag: dag2,
+            index_map: map2,
+        };
+
+        let fp1 =
+            resolve1.fingerprint_of(&parent1.package_id, &test_workspace_root(), &patch_config);
+        let fp2 =
+            resolve2.fingerprint_of(&parent2.package_id, &test_workspace_root(), &patch_config);
+
+        assert_eq!(
+            fp1, fp2,
+            "child patch fingerprints must be stable regardless of DAG insertion order"
         );
     }
 

@@ -114,6 +114,7 @@ impl BuckalContext {
                 matches!(candidate.kind, NodeKind::ThirdParty)
                     && candidate.name == node.name
                     && candidate.version == version_patch.to
+                    && candidate.source == node.source
             })
             .collect();
 
@@ -130,5 +131,142 @@ impl BuckalContext {
                 version_patch.to
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{RepoPatchConfig, VersionPatch};
+    use crate::resolve::{BuckalDep, BuckalNode, BuckalResolve, NodeKind};
+    use cargo_metadata::Edition;
+    use daggy::Dag;
+
+    fn make_node_with_source(name: &str, version: &str, source: Option<&str>) -> BuckalNode {
+        BuckalNode {
+            package_id: PackageId {
+                repr: format!(
+                    "{}#{}@{}",
+                    source.unwrap_or("path+file:///local"),
+                    name,
+                    version
+                ),
+            },
+            name: name.to_string(),
+            version: version.to_string(),
+            features: vec![],
+            kind: NodeKind::ThirdParty,
+            edition: Edition::E2021,
+            manifest_path: Utf8PathBuf::from(format!("/tmp/{}/Cargo.toml", name)),
+            targets: vec![],
+            source: source.map(String::from),
+            links: None,
+            checksum: None,
+        }
+    }
+
+    fn make_context(resolve: BuckalResolve, patch: RepoPatchConfig) -> BuckalContext {
+        BuckalContext {
+            root: None,
+            resolve,
+            workspace_root: Utf8PathBuf::from("/tmp"),
+            workspace_inherit: false,
+            no_merge: false,
+            repo_config: RepoConfig {
+                patch,
+                ..RepoConfig::default()
+            },
+        }
+    }
+
+    /// When the same crate name/version exists from two different sources (e.g.
+    /// crates.io and git), `patched_node` must select the candidate that matches
+    /// the original node's source, not bail with "ambiguous".
+    #[test]
+    fn test_patched_node_disambiguates_by_source() {
+        let registry = "registry+https://github.com/rust-lang/crates.io-index";
+        let git = "git+https://github.com/example/foo.git";
+
+        let from_registry = make_node_with_source("foo", "1.0.0", Some(registry));
+        let to_registry = make_node_with_source("foo", "2.0.0", Some(registry));
+        let to_git = make_node_with_source("foo", "2.0.0", Some(git));
+
+        let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut index_map = HashMap::new();
+
+        let idx_from = dag.add_node(from_registry.clone());
+        let idx_to_reg = dag.add_node(to_registry.clone());
+        let idx_to_git = dag.add_node(to_git.clone());
+
+        index_map.insert(from_registry.package_id.clone(), idx_from);
+        index_map.insert(to_registry.package_id.clone(), idx_to_reg);
+        index_map.insert(to_git.package_id.clone(), idx_to_git);
+
+        let resolve = BuckalResolve { dag, index_map };
+
+        let patch = RepoPatchConfig {
+            version: [(
+                "foo".to_string(),
+                VersionPatch {
+                    from: "1.0.0".to_string(),
+                    to: "2.0.0".to_string(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let ctx = make_context(resolve, patch);
+        let result = ctx.patched_node(&from_registry).unwrap();
+
+        // Must select the registry candidate, not the git one
+        assert_eq!(result.source.as_deref(), Some(registry));
+        assert_eq!(result.version, "2.0.0");
+    }
+
+    /// When the target version does not exist for the same source,
+    /// `patched_node` should return an error even if another source has it.
+    #[test]
+    fn test_patched_node_missing_when_wrong_source() {
+        let registry = "registry+https://github.com/rust-lang/crates.io-index";
+        let git = "git+https://github.com/example/foo.git";
+
+        let from_registry = make_node_with_source("foo", "1.0.0", Some(registry));
+        // Only the git source has version 2.0.0
+        let to_git = make_node_with_source("foo", "2.0.0", Some(git));
+
+        let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
+        let mut index_map = HashMap::new();
+
+        let idx_from = dag.add_node(from_registry.clone());
+        let idx_to_git = dag.add_node(to_git.clone());
+
+        index_map.insert(from_registry.package_id.clone(), idx_from);
+        index_map.insert(to_git.package_id.clone(), idx_to_git);
+
+        let resolve = BuckalResolve { dag, index_map };
+
+        let patch = RepoPatchConfig {
+            version: [(
+                "foo".to_string(),
+                VersionPatch {
+                    from: "1.0.0".to_string(),
+                    to: "2.0.0".to_string(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let ctx = make_context(resolve, patch);
+        let result = ctx.patched_node(&from_registry);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing dependency version")
+        );
     }
 }
