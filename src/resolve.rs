@@ -7,6 +7,7 @@ use daggy::{Dag, NodeIndex, Walker};
 use serde::{Deserialize, Serialize};
 
 use crate::cache::{Fingerprint, PackageIdExt};
+use crate::config::RepoPatchConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeKind {
@@ -347,7 +348,12 @@ impl BuckalResolve {
     /// `workspace_root` is used to canonicalize `PackageId` values for path dependencies
     /// so that the same project checked out at different locations produces identical
     /// fingerprints.
-    pub fn fingerprint_of(&self, pkg_id: &PackageId, workspace_root: &Utf8PathBuf) -> Fingerprint {
+    pub fn fingerprint_of(
+        &self,
+        pkg_id: &PackageId,
+        workspace_root: &Utf8PathBuf,
+        patch_config: &RepoPatchConfig,
+    ) -> Fingerprint {
         let idx = self.index_map[pkg_id];
         let node = &self.dag[idx];
         let mut hasher = blake3::Hasher::new();
@@ -447,6 +453,28 @@ impl BuckalResolve {
                     .expect("Serialization failed");
             hasher.update(&dep_encoded);
             hasher.update(child_canonical_id.repr.as_bytes());
+        }
+
+        // 9. Version patch config — if a patch references this node's crate name,
+        //    include it so adding/changing/removing a patch invalidates both the
+        //    "from" and "to" version nodes plus their dependents (via edge hashing).
+        if let Some(vp) = patch_config.version.get(&node.name) {
+            hasher.update(b"version_patch");
+            hasher.update(vp.from.as_bytes());
+            hasher.update(vp.to.as_bytes());
+        }
+
+        // 10. Version patch config for child dependencies — if any direct child
+        //     is affected by a version patch, include that patch in the parent's
+        //     fingerprint so dependents are invalidated when patches change.
+        for (_, node_idx) in self.dag.children(idx).iter(&self.dag) {
+            let child_node = &self.dag[node_idx];
+            if let Some(vp) = patch_config.version.get(&child_node.name) {
+                hasher.update(b"child_version_patch");
+                hasher.update(child_node.name.as_bytes());
+                hasher.update(vp.from.as_bytes());
+                hasher.update(vp.to.as_bytes());
+            }
         }
 
         Fingerprint::new(hasher.finalize().into())
@@ -618,14 +646,30 @@ mod tests {
 
         // Same data -> same fingerprint
         assert_eq!(
-            resolve1.fingerprint_of(&node1.package_id, &test_workspace_root()),
-            resolve2.fingerprint_of(&node2.package_id, &test_workspace_root())
+            resolve1.fingerprint_of(
+                &node1.package_id,
+                &test_workspace_root(),
+                &RepoPatchConfig::default()
+            ),
+            resolve2.fingerprint_of(
+                &node2.package_id,
+                &test_workspace_root(),
+                &RepoPatchConfig::default()
+            )
         );
 
         // Different version -> different fingerprint
         assert_ne!(
-            resolve1.fingerprint_of(&node1.package_id, &test_workspace_root()),
-            resolve3.fingerprint_of(&node3.package_id, &test_workspace_root())
+            resolve1.fingerprint_of(
+                &node1.package_id,
+                &test_workspace_root(),
+                &RepoPatchConfig::default()
+            ),
+            resolve3.fingerprint_of(
+                &node3.package_id,
+                &test_workspace_root(),
+                &RepoPatchConfig::default()
+            )
         );
     }
 
@@ -740,8 +784,16 @@ mod tests {
 
         // Fingerprints of common@1.0.0 and common@2.0.0 must differ
         assert_ne!(
-            resolve.fingerprint_of(&common_v1_id, &test_workspace_root()),
-            resolve.fingerprint_of(&common_v2_id, &test_workspace_root()),
+            resolve.fingerprint_of(
+                &common_v1_id,
+                &test_workspace_root(),
+                &RepoPatchConfig::default()
+            ),
+            resolve.fingerprint_of(
+                &common_v2_id,
+                &test_workspace_root(),
+                &RepoPatchConfig::default()
+            ),
             "different versions should produce different fingerprints"
         );
     }
@@ -892,9 +944,21 @@ mod tests {
             index_map: index_map3,
         };
 
-        let fp1 = resolve1.fingerprint_of(&make_pkg_id("a"), &test_workspace_root());
-        let fp2 = resolve2.fingerprint_of(&make_pkg_id("a"), &test_workspace_root());
-        let fp3 = resolve3.fingerprint_of(&make_pkg_id("a"), &test_workspace_root());
+        let fp1 = resolve1.fingerprint_of(
+            &make_pkg_id("a"),
+            &test_workspace_root(),
+            &RepoPatchConfig::default(),
+        );
+        let fp2 = resolve2.fingerprint_of(
+            &make_pkg_id("a"),
+            &test_workspace_root(),
+            &RepoPatchConfig::default(),
+        );
+        let fp3 = resolve3.fingerprint_of(
+            &make_pkg_id("a"),
+            &test_workspace_root(),
+            &RepoPatchConfig::default(),
+        );
 
         // Adding a dep changes the fingerprint
         assert_ne!(
@@ -906,6 +970,48 @@ mod tests {
         assert_ne!(
             fp2, fp3,
             "different edge metadata should change the fingerprint"
+        );
+    }
+
+    /// Adding a version patch for a child dependency should change the parent's
+    /// fingerprint, so that dependents are invalidated when patches change.
+    #[test]
+    fn test_version_patch_on_child_invalidates_parent_fingerprint() {
+        let mut dag = Dag::new();
+        let mut index_map = HashMap::new();
+        let parent = make_node("parent", "1.0.0");
+        let child = make_node("child", "1.0.0");
+        let idx_parent = dag.add_node(parent.clone());
+        let idx_child = dag.add_node(child.clone());
+        index_map.insert(parent.package_id.clone(), idx_parent);
+        index_map.insert(child.package_id.clone(), idx_child);
+        dag.add_edge(idx_parent, idx_child, make_dep("child"))
+            .unwrap();
+        let resolve = BuckalResolve { dag, index_map };
+
+        let fp_no_patch = resolve.fingerprint_of(
+            &parent.package_id,
+            &test_workspace_root(),
+            &RepoPatchConfig::default(),
+        );
+
+        let patch_config = RepoPatchConfig {
+            version: [(
+                "child".to_string(),
+                crate::config::VersionPatch {
+                    from: "1.0.0".to_string(),
+                    to: "2.0.0".to_string(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let fp_with_patch =
+            resolve.fingerprint_of(&parent.package_id, &test_workspace_root(), &patch_config);
+
+        assert_ne!(
+            fp_no_patch, fp_with_patch,
+            "adding a version patch for a child dep should change the parent's fingerprint"
         );
     }
 
@@ -1140,8 +1246,13 @@ mod tests {
                 repr: "path+file:///home/alice/project#foo@1.0.0".to_string(),
             },
             &alice_root,
+            &RepoPatchConfig::default(),
         );
-        let fp_bob = resolve2.fingerprint_of(&node_alice.package_id, &bob_root);
+        let fp_bob = resolve2.fingerprint_of(
+            &node_alice.package_id,
+            &bob_root,
+            &RepoPatchConfig::default(),
+        );
 
         assert_eq!(
             fp_alice, fp_bob,
@@ -1205,8 +1316,8 @@ mod tests {
             index_map: map2,
         };
 
-        let fp1 = resolve1.fingerprint_of(&node1.package_id, &root1);
-        let fp2 = resolve2.fingerprint_of(&node2.package_id, &root2);
+        let fp1 = resolve1.fingerprint_of(&node1.package_id, &root1, &RepoPatchConfig::default());
+        let fp2 = resolve2.fingerprint_of(&node2.package_id, &root2, &RepoPatchConfig::default());
 
         assert_eq!(
             fp1, fp2,

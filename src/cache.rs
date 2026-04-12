@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::buckal_error;
 use crate::utils::{UnwrapOrExit, get_cache_path};
 
+use crate::config::RepoPatchConfig;
 use crate::resolve::BuckalResolve;
 
 // type Fingerprint = [u8; 32];
@@ -15,11 +16,12 @@ use crate::resolve::BuckalResolve;
 ///
 /// Version 2: Added multi-platform support to the cache format.
 /// Version 3: Switched to BuckalNode-based fingerprinting (DAG refactor).
+/// Version 4: Include version patch config in fingerprints.
 ///
 /// Migration strategy:
 /// - If found < expected (stale cache from older Buckal): ignore the old cache and rebuild.
 /// - If found > expected (cache from newer Buckal): exit immediately and prompt the user to upgrade.
-const CACHE_VERSION: u32 = 3;
+const CACHE_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Fingerprint([u8; 32]);
@@ -105,13 +107,17 @@ pub struct BuckalCache {
 }
 
 impl BuckalCache {
-    pub fn from_resolve(resolve: &BuckalResolve, workspace_root: &Utf8PathBuf) -> Self {
+    pub fn from_resolve(
+        resolve: &BuckalResolve,
+        workspace_root: &Utf8PathBuf,
+        patch_config: &RepoPatchConfig,
+    ) -> Self {
         let fingerprints = resolve
             .nodes()
             .map(|node| {
                 (
                     node.package_id.canonicalize(workspace_root),
-                    resolve.fingerprint_of(&node.package_id, workspace_root),
+                    resolve.fingerprint_of(&node.package_id, workspace_root, patch_config),
                 )
             })
             .collect();

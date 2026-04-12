@@ -30,7 +30,7 @@ Common commands:
 
 - `cargo buckal init|new`: Create a new package or a Buck2 project in the directory.
 - `cargo buckal migrate`: Migrate an existing Cargo project to Buck2 (generate/update BUCK files).
-- `cargo buckal add|remove|update`: Manage dependencies, applying the changes to both `Cargo.toml` and `BUCK` files.
+- `cargo buckal add|remove|update|patch`: Manage dependencies, applying the changes to both `Cargo.toml`/`buckal.toml` and `BUCK` files.
 - `cargo buckal build`: Build the current package with Buck2.
 - `cargo buckal test`: Compile and execute unit and integration tests with Buck2.
 - `cargo buckal clean`: Remove `buck-out` directory.
@@ -72,6 +72,16 @@ buck2_binary = "/path/to/your/buck2"
 ```
 
 If no configuration file exists, cargo-buckal will use `buck2` (searches your PATH).
+
+To redirect dependency labels from one resolved version to another, add entries to the repo-local
+`buckal.toml`:
+
+```toml
+[patch.version]
+pyo3 = { from = "0.26.0", to = "0.27.2" }
+```
+
+You can also write these entries with `cargo buckal patch pyo3@0.27.2`.
 
 ## Pre-commit Hooks
 

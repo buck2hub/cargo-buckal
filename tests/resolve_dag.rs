@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 
+use cargo_buckal::buck::Rule;
+use cargo_buckal::buckify::buckify_root_node;
 use cargo_buckal::cache::{BuckalCache, ChangeType};
+use cargo_buckal::config::{RepoConfig, RepoPatchConfig, VersionPatch};
+use cargo_buckal::context::BuckalContext;
 use cargo_buckal::resolve::{BuckalNode, BuckalResolve, NodeKind};
 use cargo_metadata::camino::Utf8PathBuf;
 use cargo_metadata::{MetadataCommand, PackageId};
@@ -131,6 +135,7 @@ fn test_dag_first_party_demo() {
     let cache = BuckalCache::from_resolve(
         &resolve,
         &cargo_metadata::camino::Utf8PathBuf::from("/tmp/buckal-test/first-party-demo"),
+        &RepoPatchConfig::default(),
     );
     // Verify cache has entries for all nodes
     let cache_str = toml::to_string_pretty(&cache).unwrap();
@@ -216,6 +221,7 @@ fn test_dag_monorepo_demo() {
     let cache = BuckalCache::from_resolve(
         &resolve,
         &cargo_metadata::camino::Utf8PathBuf::from("/tmp/buckal-test/monorepo-demo/project"),
+        &RepoPatchConfig::default(),
     );
     let cache_str = toml::to_string_pretty(&cache).unwrap();
     assert!(
@@ -313,8 +319,8 @@ fn test_dag_fd_find() {
 
     // Cache construction and fingerprint determinism
     let ws_root = cargo_metadata::camino::Utf8PathBuf::from("/tmp/buckal-test/fd");
-    let cache1 = BuckalCache::from_resolve(&resolve, &ws_root);
-    let cache2 = BuckalCache::from_resolve(&resolve, &ws_root);
+    let cache1 = BuckalCache::from_resolve(&resolve, &ws_root, &RepoPatchConfig::default());
+    let cache2 = BuckalCache::from_resolve(&resolve, &ws_root, &RepoPatchConfig::default());
     let s1 = toml::to_string_pretty(&cache1).unwrap();
     let s2 = toml::to_string_pretty(&cache2).unwrap();
     assert_eq!(
@@ -472,8 +478,16 @@ fn test_diamond_deps_version_conflict() {
     // Fingerprints of the two itoa versions must differ
     let ws_root = Utf8PathBuf::from("/tmp");
     assert_ne!(
-        resolve.fingerprint_of(&itoa_old_node.package_id, &ws_root),
-        resolve.fingerprint_of(&itoa_new_node.package_id, &ws_root),
+        resolve.fingerprint_of(
+            &itoa_old_node.package_id,
+            &ws_root,
+            &RepoPatchConfig::default()
+        ),
+        resolve.fingerprint_of(
+            &itoa_new_node.package_id,
+            &ws_root,
+            &RepoPatchConfig::default()
+        ),
         "different itoa versions should have different fingerprints"
     );
 
@@ -523,11 +537,101 @@ fn test_diamond_deps_version_conflict() {
     let fixture_dir =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/diamond-deps");
     let ws_root = cargo_metadata::camino::Utf8PathBuf::from(fixture_dir.to_str().unwrap());
-    let cache = BuckalCache::from_resolve(&resolve, &ws_root);
+    let cache = BuckalCache::from_resolve(&resolve, &ws_root, &RepoPatchConfig::default());
     let cache_str = toml::to_string_pretty(&cache).unwrap();
     assert!(
         cache_str.contains("fingerprints"),
         "cache should contain fingerprints section"
+    );
+}
+
+#[test]
+fn test_patch_redirects_generated_dependency_label() {
+    let resolve = resolve_from_fixture("diamond-deps");
+
+    let old_crate = resolve
+        .find_by_name("uses-itoa-old", None)
+        .expect("uses-itoa-old not found")
+        .clone();
+
+    let mut itoa_nodes: Vec<&BuckalNode> = resolve.nodes().filter(|n| n.name == "itoa").collect();
+    assert_eq!(
+        itoa_nodes.len(),
+        2,
+        "expected exactly two resolved itoa versions"
+    );
+    itoa_nodes.sort_by(|a, b| a.version.cmp(&b.version));
+
+    let from_version = itoa_nodes[0].version.clone();
+    let to_version = itoa_nodes[1].version.clone();
+    let from_label = format!("//third-party/rust/crates/itoa/{from_version}:itoa");
+    let to_label = format!("//third-party/rust/crates/itoa/{to_version}:itoa");
+
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/diamond-deps");
+    let workspace_root = Utf8PathBuf::from(fixture_dir.to_str().unwrap());
+
+    let base_ctx = BuckalContext {
+        root: Some(old_crate.package_id.clone()),
+        resolve,
+        workspace_root,
+        workspace_inherit: false,
+        no_merge: false,
+        repo_config: RepoConfig::default(),
+    };
+
+    let unpatched_rules = buckify_root_node(&old_crate, &base_ctx);
+    let unpatched_lib = unpatched_rules
+        .iter()
+        .find_map(|rule| match rule {
+            Rule::RustLibrary(rule) => Some(rule),
+            _ => None,
+        })
+        .expect("missing rust_library rule for uses-itoa-old");
+    assert!(
+        unpatched_lib.deps.contains(&from_label),
+        "expected original dependency label {from_label}, got {:?}",
+        unpatched_lib.deps
+    );
+    assert!(
+        !unpatched_lib.deps.contains(&to_label),
+        "unpatched rules should not reference {to_label}"
+    );
+
+    let patched_ctx = BuckalContext {
+        repo_config: RepoConfig {
+            patch: RepoPatchConfig {
+                version: [(
+                    "itoa".to_string(),
+                    VersionPatch {
+                        from: from_version.clone(),
+                        to: to_version.clone(),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+            ..RepoConfig::default()
+        },
+        ..base_ctx
+    };
+
+    let patched_rules = buckify_root_node(&old_crate, &patched_ctx);
+    let patched_lib = patched_rules
+        .iter()
+        .find_map(|rule| match rule {
+            Rule::RustLibrary(rule) => Some(rule),
+            _ => None,
+        })
+        .expect("missing patched rust_library rule for uses-itoa-old");
+    assert!(
+        patched_lib.deps.contains(&to_label),
+        "expected patched dependency label {to_label}, got {:?}",
+        patched_lib.deps
+    );
+    assert!(
+        !patched_lib.deps.contains(&from_label),
+        "patched rules should no longer reference {from_label}"
     );
 }
 
@@ -791,7 +895,7 @@ fn test_resolve_without_lockfile() {
 
     // Cache construction should work despite missing checksums
     let ws_root = cargo_metadata::camino::Utf8PathBuf::from(tmp.path().to_str().unwrap());
-    let cache = BuckalCache::from_resolve(&resolve, &ws_root);
+    let cache = BuckalCache::from_resolve(&resolve, &ws_root, &RepoPatchConfig::default());
     let cache_str = toml::to_string_pretty(&cache).unwrap();
     assert!(
         cache_str.contains("fingerprints"),
@@ -818,10 +922,12 @@ fn test_fallback_cache_honors_manifest_path() {
     let cache_a = BuckalCache::from_resolve(
         &fixture_a,
         &cargo_metadata::camino::Utf8PathBuf::from(ws_a.to_str().unwrap()),
+        &RepoPatchConfig::default(),
     );
     let cache_b = BuckalCache::from_resolve(
         &fixture_b,
         &cargo_metadata::camino::Utf8PathBuf::from(ws_b.to_str().unwrap()),
+        &RepoPatchConfig::default(),
     );
 
     let str_a = toml::to_string_pretty(&cache_a).unwrap();
@@ -880,10 +986,12 @@ fn test_empty_cache_loses_removals() {
     let old_cache = BuckalCache::from_resolve(
         &old_resolve,
         &cargo_metadata::camino::Utf8PathBuf::from(ws_old.to_str().unwrap()),
+        &RepoPatchConfig::default(),
     );
     let new_cache = BuckalCache::from_resolve(
         &new_resolve,
         &cargo_metadata::camino::Utf8PathBuf::from(ws_new.to_str().unwrap()),
+        &RepoPatchConfig::default(),
     );
     let empty_cache = BuckalCache::new_empty();
 

@@ -56,6 +56,9 @@ pub enum BuckalSubCommands {
     /// Create a new package
     New(crate::commands::new::NewArgs),
 
+    /// Patch dependency labels to a different resolved version
+    Patch(crate::commands::patch::PatchArgs),
+
     /// Push third-party BUCK files to a registry
     Push(crate::commands::push::PushArgs),
 
@@ -88,6 +91,7 @@ impl Cli {
                         BuckalSubCommands::Logout(args) => commands::logout::execute(args),
                         BuckalSubCommands::Migrate(args) => commands::migrate::execute(args),
                         BuckalSubCommands::New(args) => commands::new::execute(args),
+                        BuckalSubCommands::Patch(args) => commands::patch::execute(args),
                         BuckalSubCommands::Push(args) => commands::push::execute(args),
                         BuckalSubCommands::Remove(args) => commands::remove::execute(args),
                         BuckalSubCommands::Test(args) => commands::test::execute(args),
@@ -218,6 +222,21 @@ mod tests {
                     assert!(err.to_string().contains("not a valid rustc target"));
                 }
                 other => panic!("expected test subcommand, got {other:?}"),
+            },
+        }
+    }
+
+    #[test]
+    fn test_cli_patch_accepts_package_spec() {
+        let cli = Cli::try_parse_from(["cargo", "buckal", "patch", "pyo3@0.27.2"])
+            .expect("failed to parse patch args");
+
+        match cli.command {
+            Commands::Buckal(args) => match args.subcommands {
+                Some(BuckalSubCommands::Patch(patch_args)) => {
+                    assert_eq!(patch_args.package, "pyo3@0.27.2");
+                }
+                other => panic!("expected patch subcommand, got {other:?}"),
             },
         }
     }

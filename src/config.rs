@@ -166,6 +166,7 @@ pub struct RepoConfig {
     pub align_cells: bool,
     pub ignore_tests: bool,
     pub patch_fields: Set<String>,
+    pub patch: RepoPatchConfig,
 }
 
 impl Default for RepoConfig {
@@ -174,8 +175,22 @@ impl Default for RepoConfig {
             align_cells: false,
             ignore_tests: true,
             patch_fields: Set::new(),
+            patch: RepoPatchConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RepoPatchConfig {
+    #[serde(skip_serializing_if = "Map::is_empty")]
+    pub version: Map<String, VersionPatch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VersionPatch {
+    pub from: String,
+    pub to: String,
 }
 
 impl RepoConfig {
@@ -210,5 +225,30 @@ impl RepoConfig {
     pub fn repo_config_path() -> PathBuf {
         let buck2_root = get_buck2_root().unwrap_or_exit();
         buck2_root.join("buckal.toml").into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RepoConfig;
+
+    #[test]
+    fn test_repo_config_deserializes_version_patch() {
+        let config: RepoConfig = toml::from_str(
+            r#"
+                [patch.version]
+                pyo3 = { from = "0.26.0", to = "0.27.2" }
+            "#,
+        )
+        .expect("failed to deserialize repo config");
+
+        let patch = config
+            .patch
+            .version
+            .get("pyo3")
+            .expect("missing pyo3 patch");
+
+        assert_eq!(patch.from, "0.26.0");
+        assert_eq!(patch.to, "0.27.2");
     }
 }

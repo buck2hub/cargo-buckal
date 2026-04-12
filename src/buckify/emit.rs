@@ -227,6 +227,9 @@ pub(super) fn emit_buildscript_run(
     // Set environment variables from dependencies that have the `links` manifest key.
     // See https://doc.rust-lang.org/cargo/reference/build-scripts.html#the-links-manifest-key
     for (dep, dep_node) in ctx.resolve.deps_of(&node.package_id) {
+        let dep_node = ctx
+            .patched_node(dep_node)
+            .unwrap_or_exit_ctx("failed to resolve patched dependency");
         if dep_node.links.is_some()
             && dep.dep_kinds.iter().any(|dk: &BuckalDepKind| {
                 dep_kind_matches(CargoTargetKind::Lib, dk.kind)

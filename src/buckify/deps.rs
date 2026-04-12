@@ -91,7 +91,12 @@ fn resolve_buckal_name(
     }
 }
 
-fn resolve_dep_label(dep: &BuckalDep, dep_node: &BuckalNode) -> Result<(String, Option<String>)> {
+fn resolve_dep_label(
+    dep: &BuckalDep,
+    dep_node: &BuckalNode,
+    ctx: &BuckalContext,
+) -> Result<(String, Option<String>)> {
+    let dep_node = ctx.patched_node(dep_node)?;
     let dep_package_name = dep_node.name.to_string();
     let is_renamed = dep.name != dep_package_name.replace("-", "_");
     let alias = if is_renamed {
@@ -244,7 +249,7 @@ pub(super) fn set_deps(
             continue;
         }
 
-        let (target_label, alias) = resolve_dep_label(dep, dep_node).with_context(|| {
+        let (target_label, alias) = resolve_dep_label(dep, dep_node, ctx).with_context(|| {
             format!(
                 "failed to resolve dependency label for '{}' (package '{}')",
                 dep.name, dep_node.name
@@ -263,6 +268,17 @@ pub(super) fn set_deps(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    use cargo_metadata::{DependencyKind, Edition, PackageId, camino::Utf8PathBuf};
+    use daggy::Dag;
+
+    use crate::{
+        buck::{CargoTargetKind, RustLibrary},
+        config::{RepoConfig, RepoPatchConfig, VersionPatch},
+        context::BuckalContext,
+        resolve::{BuckalDep, BuckalDepKind, BuckalResolve, NodeKind},
+    };
 
     fn mock_target(name: &str, kind: TargetKind) -> BuckalTarget {
         BuckalTarget {
@@ -296,5 +312,122 @@ mod tests {
 
         let name = resolve_buckal_name(&bin_targets, &lib_targets);
         assert_eq!(name, "foo");
+    }
+
+    #[test]
+    fn test_set_deps_redirects_to_patched_version() {
+        let root_id = PackageId {
+            repr: "path+file:///tmp/root#root@0.1.0".to_string(),
+        };
+        let old_id = PackageId {
+            repr: "registry+https://github.com/rust-lang/crates.io-index#foo@0.1.0".to_string(),
+        };
+        let new_id = PackageId {
+            repr: "registry+https://github.com/rust-lang/crates.io-index#foo@0.2.0".to_string(),
+        };
+
+        let root_node = BuckalNode {
+            package_id: root_id.clone(),
+            name: "root".to_string(),
+            version: "0.1.0".to_string(),
+            features: vec![],
+            kind: NodeKind::FirstParty {
+                relative_path: "".to_string(),
+            },
+            edition: Edition::E2021,
+            manifest_path: Utf8PathBuf::from("/tmp/root/Cargo.toml"),
+            targets: vec![mock_target("root", TargetKind::Lib)],
+            source: None,
+            links: None,
+            checksum: None,
+        };
+
+        let old_node = BuckalNode {
+            package_id: old_id.clone(),
+            name: "foo".to_string(),
+            version: "0.1.0".to_string(),
+            features: vec![],
+            kind: NodeKind::ThirdParty,
+            edition: Edition::E2021,
+            manifest_path: Utf8PathBuf::from("/tmp/vendor/foo/0.1.0/Cargo.toml"),
+            targets: vec![mock_target("foo", TargetKind::Lib)],
+            source: Some("registry+https://github.com/rust-lang/crates.io-index".to_string()),
+            links: None,
+            checksum: None,
+        };
+
+        let new_node = BuckalNode {
+            package_id: new_id.clone(),
+            name: "foo".to_string(),
+            version: "0.2.0".to_string(),
+            features: vec![],
+            kind: NodeKind::ThirdParty,
+            edition: Edition::E2021,
+            manifest_path: Utf8PathBuf::from("/tmp/vendor/foo/0.2.0/Cargo.toml"),
+            targets: vec![mock_target("foo", TargetKind::Lib)],
+            source: Some("registry+https://github.com/rust-lang/crates.io-index".to_string()),
+            links: None,
+            checksum: None,
+        };
+
+        let mut dag = Dag::new();
+        let root_idx = dag.add_node(root_node);
+        let old_idx = dag.add_node(old_node);
+        let new_idx = dag.add_node(new_node);
+
+        dag.add_edge(
+            root_idx,
+            old_idx,
+            BuckalDep {
+                name: "foo".to_string(),
+                dep_kinds: vec![BuckalDepKind {
+                    kind: DependencyKind::Normal,
+                    target: None,
+                }],
+            },
+        )
+        .expect("failed to add edge");
+
+        let mut index_map = HashMap::new();
+        index_map.insert(root_id.clone(), root_idx);
+        index_map.insert(old_id, old_idx);
+        index_map.insert(new_id, new_idx);
+
+        let ctx = BuckalContext {
+            root: Some(root_id.clone()),
+            resolve: BuckalResolve { dag, index_map },
+            workspace_root: Utf8PathBuf::from("/tmp/root"),
+            workspace_inherit: false,
+            no_merge: false,
+            repo_config: RepoConfig {
+                patch: RepoPatchConfig {
+                    version: [(
+                        "foo".to_string(),
+                        VersionPatch {
+                            from: "0.1.0".to_string(),
+                            to: "0.2.0".to_string(),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                },
+                ..RepoConfig::default()
+            },
+        };
+
+        let root = ctx.resolve.get(&root_id).expect("missing root node");
+        let mut rule = RustLibrary::default();
+
+        set_deps(&mut rule, root, CargoTargetKind::Lib, &ctx).expect("failed to set deps");
+
+        assert!(
+            rule.deps
+                .contains("//third-party/rust/crates/foo/0.2.0:foo")
+        );
+        assert!(
+            !rule
+                .deps
+                .contains("//third-party/rust/crates/foo/0.1.0:foo")
+        );
     }
 }

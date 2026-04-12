@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
+use anyhow::{Result, bail};
 use cargo_metadata::{MetadataCommand, PackageId, camino::Utf8PathBuf};
 use cargo_util_schemas::{lockfile::TomlLockfile, manifest::TomlManifest};
 
 use crate::{
     config::RepoConfig,
-    resolve::BuckalResolve,
+    resolve::{BuckalNode, BuckalResolve, NodeKind},
     utils::{UnwrapOrExit, get_buck2_root},
 };
 
@@ -90,6 +91,44 @@ impl BuckalContext {
             workspace_inherit,
             no_merge: false,
             repo_config,
+        }
+    }
+
+    pub fn patched_node<'a>(&'a self, node: &'a BuckalNode) -> Result<&'a BuckalNode> {
+        if !matches!(node.kind, NodeKind::ThirdParty) {
+            return Ok(node);
+        }
+
+        let Some(version_patch) = self.repo_config.patch.version.get(&node.name) else {
+            return Ok(node);
+        };
+
+        if version_patch.from != node.version {
+            return Ok(node);
+        }
+
+        let candidates: Vec<&BuckalNode> = self
+            .resolve
+            .nodes()
+            .filter(|candidate| {
+                matches!(candidate.kind, NodeKind::ThirdParty)
+                    && candidate.name == node.name
+                    && candidate.version == version_patch.to
+            })
+            .collect();
+
+        match candidates.as_slice() {
+            [patched] => Ok(*patched),
+            [] => bail!(
+                "version patch for '{}' points to missing dependency version '{}'",
+                node.name,
+                version_patch.to
+            ),
+            _ => bail!(
+                "version patch for '{}' is ambiguous for version '{}'",
+                node.name,
+                version_patch.to
+            ),
         }
     }
 }

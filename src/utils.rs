@@ -545,7 +545,7 @@ pub fn get_last_cache(manifest_path: Option<&str>) -> BuckalCache {
                 return BuckalCache::new_empty();
             }
         };
-        BuckalCache::from_resolve(&resolve, &metadata.workspace_root)
+        BuckalCache::from_resolve(&resolve, &metadata.workspace_root, &crate::config::RepoPatchConfig::default())
     })
 }
 

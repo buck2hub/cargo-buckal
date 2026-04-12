@@ -122,7 +122,8 @@ pub fn execute(args: &MigrateArgs) {
     } else {
         BuckalCache::load().unwrap_or_exit_ctx("failed to load existing cache")
     };
-    let new_cache = BuckalCache::from_resolve(&ctx.resolve, &ctx.workspace_root);
+    let new_cache =
+        BuckalCache::from_resolve(&ctx.resolve, &ctx.workspace_root, &ctx.repo_config.patch);
     let changes = new_cache.diff(&last_cache, &ctx.workspace_root);
 
     // Apply changes to BUCK files
