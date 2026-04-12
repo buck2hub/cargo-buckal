@@ -455,23 +455,29 @@ impl BuckalResolve {
             hasher.update(child_canonical_id.repr.as_bytes());
         }
 
-        // 9. Version patch config — if a patch references this node's crate name,
-        //    include it so adding/changing/removing a patch invalidates both the
-        //    "from" and "to" version nodes plus their dependents (via edge hashing).
-        if let Some(vp) = patch_config.version.get(&node.name) {
+        // 9. Version patch config — if a patch references this node's crate name
+        //    AND this node's version matches the patch's "from" or "to", include
+        //    the patch so that only the affected version nodes (and their dependents
+        //    via edge hashing) are invalidated when patches change.
+        if let Some(vp) = patch_config.version.get(&node.name)
+            && (node.version == vp.from || node.version == vp.to)
+        {
             hasher.update(b"version_patch");
             hasher.update(vp.from.as_bytes());
             hasher.update(vp.to.as_bytes());
         }
 
         // 10. Version patch config for child dependencies — if any direct child
-        //     is affected by a version patch, include that patch in the parent's
-        //     fingerprint so dependents are invalidated when patches change.
+        //     is affected by a version patch (i.e. the child's version matches the
+        //     patch's "from" or "to"), include that patch in the parent's fingerprint
+        //     so dependents are invalidated when patches change.
         //     Reuse the already-sorted `children` list for deterministic hashing.
         for (_, edge_idx) in &children {
             let (_, child_idx) = self.dag.edge_endpoints(*edge_idx).unwrap();
             let child_node = &self.dag[child_idx];
-            if let Some(vp) = patch_config.version.get(&child_node.name) {
+            if let Some(vp) = patch_config.version.get(&child_node.name)
+                && (child_node.version == vp.from || child_node.version == vp.to)
+            {
                 hasher.update(b"child_version_patch");
                 hasher.update(child_node.name.as_bytes());
                 hasher.update(vp.from.as_bytes());

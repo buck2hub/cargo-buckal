@@ -545,8 +545,25 @@ pub fn get_last_cache(manifest_path: Option<&str>) -> BuckalCache {
                 return BuckalCache::new_empty();
             }
         };
-        BuckalCache::from_resolve(&resolve, &metadata.workspace_root, &crate::config::RepoPatchConfig::default())
+        let repo_patch_config = load_repo_patch_config(&metadata.workspace_root);
+        BuckalCache::from_resolve(&resolve, &metadata.workspace_root, &repo_patch_config)
     })
+}
+
+/// Load the patch config from `buckal.toml` at the given workspace root,
+/// falling back to defaults if the file is missing or unparsable.
+fn load_repo_patch_config(
+    workspace_root: &cargo_metadata::camino::Utf8PathBuf,
+) -> crate::config::RepoPatchConfig {
+    let config_path = workspace_root.join("buckal.toml");
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(_) => return crate::config::RepoPatchConfig::default(),
+    };
+    match toml::from_str::<crate::config::RepoConfig>(&content) {
+        Ok(c) => c.patch,
+        Err(_) => crate::config::RepoPatchConfig::default(),
+    }
 }
 
 /// Read checksums from Cargo.lock, returning an empty map if the file is missing or unparsable.
