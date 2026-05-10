@@ -206,3 +206,156 @@ pub enum ChangeType {
     Removed,
     Changed,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CACHE_VERSION, PackageIdExt};
+    use cargo_metadata::{PackageId, camino::Utf8PathBuf};
+
+    // `cargo metadata` reports `workspace_root` as a *native* filesystem path,
+    // but a path-source package id embeds it as the body of a `file://` *URL*:
+    // forward slashes throughout, a leading slash before a Windows drive letter,
+    // and percent-encoding for characters like spaces. `canonicalize` / `resolve`
+    // must bridge the two so `buckal.snap` stores the path-independent
+    // `($WORKSPACE)` placeholder. On Unix a simple absolute path happens to equal
+    // its URL body, so the bug only surfaces on Windows — except for paths
+    // containing characters cargo percent-encodes (`C:\Users\Jane Doe\…`), which
+    // break the bare-substring approach on every platform.
+    //
+    // The shapes below are picked per host because `url::Url::from_file_path`
+    // (used by the fix, and by Cargo itself) only accepts a path that is
+    // absolute *on the current OS*.
+
+    fn ws() -> Utf8PathBuf {
+        if cfg!(windows) {
+            Utf8PathBuf::from(r"D:\proj")
+        } else {
+            Utf8PathBuf::from("/work/proj")
+        }
+    }
+
+    /// The `path+file://…` prefix Cargo emits for path crates under [`ws`].
+    fn ws_prefix() -> &'static str {
+        if cfg!(windows) {
+            "path+file:///D:/proj"
+        } else {
+            "path+file:///work/proj"
+        }
+    }
+
+    fn ws_spaced() -> Utf8PathBuf {
+        if cfg!(windows) {
+            Utf8PathBuf::from(r"D:\Code\Jane Doe\proj")
+        } else {
+            Utf8PathBuf::from("/work/Jane Doe/proj")
+        }
+    }
+
+    fn ws_spaced_prefix() -> &'static str {
+        if cfg!(windows) {
+            "path+file:///D:/Code/Jane%20Doe/proj"
+        } else {
+            "path+file:///work/Jane%20Doe/proj"
+        }
+    }
+
+    #[test]
+    fn canonicalize_workspace_internal_path_crate() {
+        let id = PackageId {
+            repr: format!("{}/crates/foo#0.1.0", ws_prefix()),
+        };
+        assert_eq!(
+            id.canonicalize(&ws()).repr,
+            "path+file://($WORKSPACE)/crates/foo#0.1.0",
+            "a path crate under the workspace root must be rewritten to ($WORKSPACE)"
+        );
+    }
+
+    #[test]
+    fn resolve_reproduces_cargo_metadata_repr() {
+        let canon = PackageId {
+            repr: "path+file://($WORKSPACE)/crates/foo#0.1.0".to_string(),
+        };
+        assert_eq!(
+            canon.resolve(&ws()).repr,
+            format!("{}/crates/foo#0.1.0", ws_prefix()),
+            "resolve must reproduce the exact repr `cargo metadata` emits"
+        );
+    }
+
+    #[test]
+    fn canonicalize_handles_workspace_root_package_itself() {
+        let id = PackageId {
+            repr: format!("{}#0.7.0", ws_prefix()),
+        };
+        assert_eq!(
+            id.canonicalize(&ws()).repr,
+            "path+file://($WORKSPACE)#0.7.0"
+        );
+    }
+
+    #[test]
+    fn canonicalize_handles_percent_encoded_workspace_path() {
+        // A workspace under a directory whose name contains a space: Cargo
+        // percent-encodes it in the package id, so a literal substring match on
+        // the native path fails on every platform.
+        let id = PackageId {
+            repr: format!("{}/crates/foo#0.1.0", ws_spaced_prefix()),
+        };
+        assert_eq!(
+            id.canonicalize(&ws_spaced()).repr,
+            "path+file://($WORKSPACE)/crates/foo#0.1.0"
+        );
+        let back = PackageId {
+            repr: "path+file://($WORKSPACE)/crates/foo#0.1.0".to_string(),
+        };
+        assert_eq!(
+            back.resolve(&ws_spaced()).repr,
+            format!("{}/crates/foo#0.1.0", ws_spaced_prefix())
+        );
+    }
+
+    #[test]
+    fn canonicalize_leaves_non_workspace_path_crate_untouched() {
+        // A path dep that lives *outside* the workspace must be left alone — the
+        // ($WORKSPACE) placeholder can't express it. Guards against over-reach.
+        let outside = if cfg!(windows) {
+            "path+file:///D:/other/lib/bar#0.1.0"
+        } else {
+            "path+file:///work/other/lib/bar#0.1.0"
+        };
+        let id = PackageId {
+            repr: outside.to_string(),
+        };
+        assert_eq!(id.canonicalize(&ws()).repr, id.repr);
+    }
+
+    #[test]
+    fn canonicalize_leaves_registry_id_untouched() {
+        let id = PackageId {
+            repr: "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.0".to_string(),
+        };
+        assert_eq!(id.canonicalize(&ws()).repr, id.repr);
+    }
+
+    #[test]
+    fn canonicalize_does_not_match_sibling_directory() {
+        // `<root>` must not be matched as a bare substring of a sibling directory
+        // that merely shares a name prefix (`proj` vs `proj_sidecar`).
+        let id = PackageId {
+            repr: format!("{}_sidecar/lib/bar#0.1.0", ws_prefix()),
+        };
+        assert_eq!(id.canonicalize(&ws()).repr, id.repr);
+    }
+
+    #[test]
+    fn cache_version_bumped_for_workspace_pathfmt_change() {
+        // Pre-v4 caches store absolute path-crate keys (verbatim on Windows); v4
+        // stores the ($WORKSPACE) form. The version bump forces a rebuild instead
+        // of a misdiff between the two representations on first run after upgrade.
+        assert!(
+            CACHE_VERSION >= 4,
+            "CACHE_VERSION must be bumped when the workspace path-id format changes"
+        );
+    }
+}
