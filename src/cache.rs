@@ -17,11 +17,16 @@ use crate::resolve::BuckalResolve;
 /// Version 2: Added multi-platform support to the cache format.
 /// Version 3: Switched to BuckalNode-based fingerprinting (DAG refactor).
 /// Version 4: Include version patch config in fingerprints.
+/// Version 5: Canonicalized workspace-internal path-source PackageIds to the
+///            `($WORKSPACE)` `file://`-URL form. Pre-v5 caches stored the
+///            absolute workspace path verbatim (always so on Windows, where
+///            canonicalization used to no-op), so diffing an older cache against a
+///            v5-format snapshot would report spurious add/remove entries.
 ///
 /// Migration strategy:
 /// - If found < expected (stale cache from older Buckal): ignore the old cache and rebuild.
 /// - If found > expected (cache from newer Buckal): exit immediately and prompt the user to upgrade.
-const CACHE_VERSION: u32 = 4;
+const CACHE_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Fingerprint([u8; 32]);
@@ -61,6 +66,33 @@ pub trait BuckalHash {
     fn fingerprint(&self) -> Fingerprint;
 }
 
+/// Placeholder written into `buckal.snap` in place of the absolute workspace
+/// root, so the cache file is portable across checkouts at different paths.
+const WORKSPACE_ID_PLACEHOLDER: &str = "path+file://($WORKSPACE)";
+
+/// The `path+file://…` package-id prefix Cargo emits for crates under
+/// `workspace_root`.
+///
+/// `cargo metadata` reports `workspace_root` as a native filesystem path, but
+/// path-source package ids embed it as a `file://` URL — forward slashes, a
+/// leading slash before a Windows drive letter, percent-encoding for characters
+/// like spaces. Building the prefix via [`url::Url::from_file_path`], the same
+/// conversion Cargo itself uses, keeps the two in lockstep on every platform
+/// (the previous hand-rolled substring match silently failed on Windows and on
+/// any path containing escaped characters).
+fn workspace_id_prefix(workspace_root: &Utf8PathBuf) -> String {
+    let url = url::Url::from_file_path(workspace_root.as_std_path())
+        .expect("workspace_root from `cargo metadata` is always an absolute path");
+    format!("path+{url}")
+}
+
+/// Whether `rest` — what follows a workspace-root prefix in a package-id repr —
+/// is a real boundary (a subpath `/…` or the version tag `#…`) rather than the
+/// prefix merely being a substring of a sibling directory's path.
+fn is_id_boundary(rest: &str) -> bool {
+    rest.starts_with('/') || rest.starts_with('#')
+}
+
 pub trait PackageIdExt {
     /// ($WORKSPACE) → workspace_root
     fn resolve(&self, workspace_root: &Utf8PathBuf) -> Self;
@@ -71,31 +103,21 @@ pub trait PackageIdExt {
 
 impl PackageIdExt for PackageId {
     fn resolve(&self, workspace_root: &Utf8PathBuf) -> Self {
-        if self.repr.starts_with("path+file://($WORKSPACE)") {
-            PackageId {
-                repr: self
-                    .repr
-                    .clone()
-                    .replace("($WORKSPACE)", workspace_root.as_str()),
-            }
-        } else {
-            self.clone()
+        match self.repr.strip_prefix(WORKSPACE_ID_PLACEHOLDER) {
+            Some(rest) if is_id_boundary(rest) => PackageId {
+                repr: format!("{}{rest}", workspace_id_prefix(workspace_root)),
+            },
+            _ => self.clone(),
         }
     }
 
     fn canonicalize(&self, workspace_root: &Utf8PathBuf) -> Self {
-        if self
-            .repr
-            .starts_with(format!("path+file://{}", workspace_root.as_str()).as_str())
-        {
-            PackageId {
-                repr: self
-                    .repr
-                    .clone()
-                    .replace(workspace_root.as_str(), "($WORKSPACE)"),
-            }
-        } else {
-            self.clone()
+        let prefix = workspace_id_prefix(workspace_root);
+        match self.repr.strip_prefix(prefix.as_str()) {
+            Some(rest) if is_id_boundary(rest) => PackageId {
+                repr: format!("{WORKSPACE_ID_PLACEHOLDER}{rest}"),
+            },
+            _ => self.clone(),
         }
     }
 }
@@ -350,12 +372,12 @@ mod tests {
 
     #[test]
     fn cache_version_bumped_for_workspace_pathfmt_change() {
-        // Pre-v4 caches store absolute path-crate keys (verbatim on Windows); v4
-        // stores the ($WORKSPACE) form. The version bump forces a rebuild instead
-        // of a misdiff between the two representations on first run after upgrade.
-        assert!(
-            CACHE_VERSION >= 4,
-            "CACHE_VERSION must be bumped when the workspace path-id format changes"
-        );
+        // v5 is the bump for ($WORKSPACE) path-id canonicalization: pre-v5 caches
+        // store the absolute workspace path verbatim (always so on Windows), so an
+        // older cache must be rebuilt rather than diffed against the v5 form. Pinned
+        // exactly — not `>=` — so a future bump is a deliberate, visible event:
+        // when you bump CACHE_VERSION, update this assertion and add the rationale
+        // to the CACHE_VERSION doc comment.
+        assert_eq!(CACHE_VERSION, 5);
     }
 }
