@@ -114,13 +114,16 @@ pub fn execute(args: &MigrateArgs) {
     ctx.no_merge = !args.merge;
 
     // Process dep nodes
-    // For migrate, a missing/stale cache means "first run" — use empty so everything
-    // is treated as Added and BUCK files are generated from scratch. This differs from
-    // add/remove/update which use get_last_cache() to rebuild from metadata for diffing.
-    let last_cache = if args.no_cache || BuckalCache::load().is_err() {
+    // For migrate, a missing cache means "first run" — use empty so everything is
+    // treated as Added and BUCK files are generated from scratch. A stale-but-
+    // migratable cache (e.g. a v4 snapshot after the v5 path-id bump) is upgraded
+    // in place rather than discarded, so packages dropped from the manifest are
+    // still detected as Removed. This differs from add/remove/update, which use
+    // get_last_cache() to rebuild the prior state from metadata before the edit.
+    let last_cache = if args.no_cache {
         BuckalCache::new_empty()
     } else {
-        BuckalCache::load().unwrap_or_exit_ctx("failed to load existing cache")
+        BuckalCache::load_migrated(&ctx.workspace_root).unwrap_or_else(|_| BuckalCache::new_empty())
     };
     let new_cache =
         BuckalCache::from_resolve(&ctx.resolve, &ctx.workspace_root, &ctx.repo_config.patch);

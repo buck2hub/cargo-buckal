@@ -156,7 +156,10 @@ impl BuckalCache {
         }
     }
 
-    pub fn load() -> Result<Self, Error> {
+    /// Read and parse the on-disk cache, exiting if it was written by a newer
+    /// Buckal. The returned cache may still be a stale (older) version — callers
+    /// decide whether to reject or migrate it.
+    fn read_from_disk() -> Result<Self, Error> {
         let cache_path = get_cache_path().unwrap_or_exit_ctx("failed to get cache path");
         if !cache_path.exists() {
             return Err(anyhow!("Cache file does not exist"));
@@ -172,6 +175,11 @@ impl BuckalCache {
             );
             std::process::exit(1);
         }
+        Ok(cache)
+    }
+
+    pub fn load() -> Result<Self, Error> {
+        let cache = Self::read_from_disk()?;
         if cache.version < CACHE_VERSION {
             return Err(anyhow!(
                 "Cache version is stale (found {}, expected {})",
@@ -180,6 +188,53 @@ impl BuckalCache {
             ));
         }
         Ok(cache)
+    }
+
+    /// Like [`load`](Self::load), but upgrades an older-but-migratable cache in
+    /// place instead of rejecting it.
+    ///
+    /// A bare `load()` returns `Err` on any stale version, which `migrate`
+    /// turns into [`new_empty`](Self::new_empty) — and an empty `last` cache
+    /// reports nothing as `Removed`, leaving orphaned BUCK targets behind on a
+    /// version bump. `migrate` cannot fall back to rebuilding the prior state
+    /// from `cargo metadata` (the way add/remove/update do) because there is no
+    /// pending manifest edit: current metadata already equals the new state, so
+    /// removed packages are simply absent from it.
+    ///
+    /// The v4→v5 bump only changed how workspace path-source `PackageId`s are
+    /// keyed (verbatim absolute path → `($WORKSPACE)`), not the struct layout,
+    /// so we can preserve removal detection by re-keying the old fingerprints
+    /// with the fixed canonicalizer. Fingerprint *values* are kept as-is; any
+    /// that no longer match a freshly computed snapshot just re-emit as
+    /// `Changed`, which is safe (and on Windows actively rewrites BUCK files
+    /// that had embedded an absolute path).
+    pub fn load_migrated(workspace_root: &Utf8PathBuf) -> Result<Self, Error> {
+        let cache = Self::read_from_disk()?;
+        if cache.version == CACHE_VERSION {
+            return Ok(cache);
+        }
+        if cache.version == 4 {
+            return Ok(cache.rekeyed_v4_to_v5(workspace_root));
+        }
+        Err(anyhow!(
+            "Cache version is stale and not migratable (found {}, expected {})",
+            cache.version,
+            CACHE_VERSION
+        ))
+    }
+
+    /// Re-key a v4 cache's fingerprints to the v5 `($WORKSPACE)` form. v5 only
+    /// changed key canonicalization, so the package set is preserved verbatim —
+    /// which is what keeps `diff()` reporting `Removed` across the bump.
+    fn rekeyed_v4_to_v5(self, workspace_root: &Utf8PathBuf) -> Self {
+        Self {
+            fingerprints: self
+                .fingerprints
+                .into_iter()
+                .map(|(id, fp)| (id.canonicalize(workspace_root), fp))
+                .collect(),
+            version: CACHE_VERSION,
+        }
     }
 
     pub fn save(&self) {
@@ -379,5 +434,60 @@ mod tests {
         // when you bump CACHE_VERSION, update this assertion and add the rationale
         // to the CACHE_VERSION doc comment.
         assert_eq!(CACHE_VERSION, 5);
+    }
+
+    #[test]
+    fn migrating_v4_cache_preserves_removal_detection() {
+        use super::{BuckalCache, ChangeType, Fingerprint};
+        use std::collections::BTreeMap;
+
+        // A v4 snapshot as written on Windows: workspace path-source ids stored
+        // with the absolute path verbatim (the pre-v5 canonicalize no-op).
+        let foo_abs = PackageId {
+            repr: format!("{}/crates/foo#0.1.0", ws_prefix()),
+        };
+        let bar_abs = PackageId {
+            repr: format!("{}/crates/bar#0.1.0", ws_prefix()),
+        };
+        let mut v4 = BTreeMap::new();
+        v4.insert(foo_abs.clone(), Fingerprint::new([1u8; 32]));
+        v4.insert(bar_abs.clone(), Fingerprint::new([2u8; 32]));
+        let v4_cache = BuckalCache {
+            fingerprints: v4,
+            version: 4,
+        };
+
+        // The new resolve dropped `bar` from the manifest; its keys are v5-canonical.
+        let foo_canon = foo_abs.canonicalize(&ws());
+        let mut v5 = BTreeMap::new();
+        v5.insert(foo_canon.clone(), Fingerprint::new([1u8; 32]));
+        let new_cache = BuckalCache {
+            fingerprints: v5,
+            version: CACHE_VERSION,
+        };
+
+        let migrated = v4_cache.rekeyed_v4_to_v5(&ws());
+        let changes = new_cache.diff(&migrated, &ws());
+
+        // `bar` must be reported as Removed. Discarding the stale cache (the old
+        // new_empty() path) would silently keep its orphaned BUCK target — the
+        // regression Codex flagged.
+        let bar_resolved = bar_abs.canonicalize(&ws()).resolve(&ws());
+        assert!(
+            matches!(
+                changes.changes.get(&bar_resolved),
+                Some(ChangeType::Removed)
+            ),
+            "removed workspace crate must be detected as Removed after v4->v5 migration; got {:?}",
+            changes.changes
+        );
+        // `foo` is unchanged (same fingerprint, key now aligned), so the
+        // migration introduces no spurious diff entry for it.
+        let foo_resolved = foo_canon.resolve(&ws());
+        assert!(
+            !changes.changes.contains_key(&foo_resolved),
+            "unchanged crate must not appear in the diff after migration; got {:?}",
+            changes.changes
+        );
     }
 }
