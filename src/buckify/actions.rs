@@ -8,7 +8,7 @@ use crate::{
     cache::{BuckalChange, ChangeType},
     context::BuckalContext,
     resolve::{BuckalNode, NodeKind},
-    utils::{UnwrapOrExit, get_vendor_dir},
+    utils::{UnwrapOrExit, get_vendor_dir, is_path_source},
 };
 
 use super::{
@@ -20,7 +20,6 @@ impl BuckalChange {
     pub fn apply(&self, ctx: &BuckalContext) {
         let re: Regex = Regex::new(r"^([^+#]+)\+([^#]+)#([^@]+)@([^+#]+)(?:\+(.+))?$")
             .expect("error creating regex");
-        let skip_pattern = format!("path+file://{}", ctx.workspace_root);
 
         let mut workspace_emitted = false;
 
@@ -79,8 +78,12 @@ impl BuckalChange {
                     }
                 }
                 ChangeType::Removed => {
-                    // Skip workspace_root package
-                    if id.repr.starts_with(skip_pattern.as_str()) {
+                    // Path-source packages (the workspace root, its members, and any
+                    // local `path = "..."` dep) live in the user's source tree, not in
+                    // a vendor directory, so there is nothing for us to remove. Skip
+                    // them; get_vendor_dir would otherwise abort on the unsupported
+                    // source kind.
+                    if is_path_source(id).unwrap_or_exit_ctx("failed to classify package source") {
                         continue;
                     }
 
