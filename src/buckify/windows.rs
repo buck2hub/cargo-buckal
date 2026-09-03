@@ -4,7 +4,6 @@ use starlark_syntax::codemap::{Pos, Span, Spanned};
 use starlark_syntax::syntax::ast::{
     ArgumentP, AstExpr, AstLiteral, AstNoPayload, AstStmt, CallArgsP, ExprP, IdentP, Stmt,
 };
-use starlark_syntax::syntax::module::AstModuleFields;
 use starlark_syntax::syntax::{AstModule, Dialect};
 
 use cargo_metadata::TargetKind;

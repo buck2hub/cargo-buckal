@@ -391,7 +391,7 @@ impl BuckalResolve {
         for target in &node.targets {
             hasher.update(target.name.as_bytes());
             let kind_encoded =
-                bincode::serde::encode_to_vec(&target.kind, bincode::config::standard())
+                bincode_next::serde::encode_to_vec(&target.kind, bincode_next::config::standard())
                     .expect("Serialization failed");
             hasher.update(&kind_encoded);
             let rel_src = target
@@ -448,9 +448,11 @@ impl BuckalResolve {
         children.sort_by(|(a, _), (b, _)| a.repr.cmp(&b.repr));
 
         for (child_canonical_id, edge_idx) in &children {
-            let dep_encoded =
-                bincode::serde::encode_to_vec(&self.dag[*edge_idx], bincode::config::standard())
-                    .expect("Serialization failed");
+            let dep_encoded = bincode_next::serde::encode_to_vec(
+                &self.dag[*edge_idx],
+                bincode_next::config::standard(),
+            )
+            .expect("Serialization failed");
             hasher.update(&dep_encoded);
             hasher.update(child_canonical_id.repr.as_bytes());
         }
