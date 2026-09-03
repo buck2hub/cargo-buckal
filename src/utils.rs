@@ -23,7 +23,9 @@ macro_rules! buckal_log {
             "Adding" => ::colored::Colorize::green($action),
             "Creating" => ::colored::Colorize::green($action),
             "Flushing" => ::colored::Colorize::green($action),
+            "Installing" => ::colored::Colorize::green($action),
             "Removing" => ::colored::Colorize::yellow($action),
+            "Replacing" => ::colored::Colorize::green($action),
             "Fetching" => ::colored::Colorize::cyan($action),
             "Login" => ::colored::Colorize::green($action),
             "Logout" => ::colored::Colorize::green($action),
@@ -168,35 +170,9 @@ pub fn prompt_buck2_installation() -> io::Result<bool> {
 }
 
 fn install_buck2_automatically() -> io::Result<()> {
-    println!("{} {}", "📦".cyan(), "Installing Rust nightly...".cyan());
-    let status = Command::new("rustup")
-        .args(["install", "nightly-2025-06-20"])
-        .status()?;
-
-    if !status.success() {
-        return Err(io::Error::other("Failed to install Rust nightly"));
-    }
-
-    println!(
-        "{} {}",
-        "📦".cyan(),
-        "Installing Buck2 from GitHub...".cyan()
-    );
-    let status = Command::new("cargo")
-        .args([
-            "+nightly-2025-06-20",
-            "install",
-            "--git",
-            "https://github.com/facebook/buck2.git",
-            "buck2",
-        ])
-        .status()?;
-
-    if !status.success() {
-        return Err(io::Error::other("Failed to install Buck2"));
-    }
-
-    Ok(())
+    crate::commands::setup::install_buck2(true)
+        .map(|_| ())
+        .map_err(|e| io::Error::other(e.to_string()))
 }
 
 fn show_manual_installation() {
@@ -214,22 +190,48 @@ fn show_manual_installation() {
     );
     println!();
 
-    // Method 1: Cargo install
+    // Method 1: Direct download
     println!(
         "{}",
-        "Method 1: Install via Cargo (Recommended)".cyan().bold()
+        "Method 1: Download Pre-built Binary (Recommended)"
+            .cyan()
+            .bold()
     );
-    println!("{}", "1. Install Rust nightly (prerequisite)".cyan());
+    println!("{}", "1. Download from GitHub releases".cyan());
+    println!(
+        "   {}",
+        "https://github.com/facebook/buck2/releases/tag/latest"
+            .bright_white()
+            .underline()
+    );
+    println!();
+    println!("{}", "2. Extract and place in your PATH".cyan());
+    println!(
+        "   {}",
+        "# Extract the downloaded file and move to a directory in your PATH".bright_black()
+    );
+    println!(
+        "   {}",
+        "# For example: /usr/local/bin (Linux/macOS) or C:\\bin (Windows)".bright_black()
+    );
+    println!();
+
+    println!("{}", "─".repeat(60).bright_black());
+    println!();
+
+    // Method 2: Cargo install
+    println!("{}", "Method 2: Install via Cargo".yellow().bold());
+    println!("{}", "1. Install Rust nightly (prerequisite)".yellow());
     println!("   {}", "rustup install nightly-2025-06-20".bright_white());
     println!();
-    println!("{}", "2. Install Buck2 from GitHub".cyan());
+    println!("{}", "2. Install Buck2 from GitHub".yellow());
     println!(
         "   {}",
         "cargo +nightly-2025-06-20 install --git https://github.com/facebook/buck2.git buck2"
             .bright_white()
     );
     println!();
-    println!("{}", "3. Add to your PATH (if not already)".cyan());
+    println!("{}", "3. Add to your PATH (if not already)".yellow());
     println!(
         "   {}",
         "# Add to your shell profile (~/.bashrc, ~/.zshrc, etc.)".bright_black()
@@ -240,30 +242,6 @@ fn show_manual_installation() {
     println!(
         "   {}",
         "$Env:PATH += \";$HOME\\.cargo\\bin\"".bright_white()
-    );
-    println!();
-
-    println!("{}", "─".repeat(60).bright_black());
-    println!();
-
-    // Method 2: Direct download
-    println!("{}", "Method 2: Download Pre-built Binary".yellow().bold());
-    println!("{}", "1. Download from GitHub releases".yellow());
-    println!(
-        "   {}",
-        "https://github.com/facebook/buck2/releases/tag/latest"
-            .bright_white()
-            .underline()
-    );
-    println!();
-    println!("{}", "2. Extract and place in your PATH".yellow());
-    println!(
-        "   {}",
-        "# Extract the downloaded file and move to a directory in your PATH".bright_black()
-    );
-    println!(
-        "   {}",
-        "# For example: /usr/local/bin (Linux/macOS) or C:\\bin (Windows)".bright_black()
     );
     println!();
 

@@ -69,7 +69,7 @@ pub fn execute(args: &AutoremoveArgs) {
             if args.dry_run {
                 println!("  {}", entry_display);
             } else {
-                buckal_log!("Removing", format!("{}", entry_display));
+                buckal_log!("Removing", entry_display.to_string());
                 std::fs::remove_dir_all(entry.as_ref().unwrap().path()).unwrap_or_exit();
             }
         }

@@ -18,6 +18,7 @@ categories = [
 ]
 
 [dependencies]
+allocative = "=0.3.4"
 cargo-platform = "0.3.0"
 cargo_metadata = "0.22.0"
 clap = { version = "4.5.41", features = ["derive"] }
@@ -31,6 +32,7 @@ serde_derive = "1.0.219"
 serde_starlark = "0.1.17"
 starlark_syntax = "0.13"
 colored = "2.0"
+indicatif = "0.18.3"
 inquire = "0.7.5"
 toml = "0.8"
 serde_json = "1.0.143"
@@ -51,6 +53,7 @@ sha1 = "0.10.6"
 cargo-util-schemas = "0.12.0"
 url = "2.5.8"
 globset = "0.4.18"
+ruzstd = "0.9.0"
 
 [dev-dependencies]
 tempfile = "3"

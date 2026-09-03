@@ -195,7 +195,7 @@ pub(super) fn emit_buildscript_build(
     )
     .unwrap_or_exit_ctx(format!(
         "failed to set dependencies for '{}'",
-        &buildscript_build.name
+        buildscript_build.name
     ));
 
     buildscript_build
