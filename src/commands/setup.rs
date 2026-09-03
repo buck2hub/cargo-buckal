@@ -521,10 +521,31 @@ fn set_executable(_path: &Path) -> io::Result<()> {
 
 #[cfg(windows)]
 fn replace_file(temp_path: &Path, destination: &Path) -> io::Result<()> {
-    if destination.exists() {
-        fs::remove_file(destination)?;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+
+    let temp_path_wide: Vec<u16> = temp_path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination_wide: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+
+    let replaced = unsafe {
+        MoveFileExW(
+            temp_path_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+
+    if replaced == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
     }
-    fs::rename(temp_path, destination)
 }
 
 #[cfg(not(windows))]
