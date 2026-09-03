@@ -1,5 +1,6 @@
 use std::{
-    env, fs, io,
+    env::consts,
+    fs, io,
     io::{Read, Write},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -11,13 +12,19 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use inquire::Confirm;
 use reqwest::{
     blocking::Client,
-    header::{CONTENT_LENGTH, USER_AGENT},
+    header::{ACCEPT, CONTENT_LENGTH, USER_AGENT},
 };
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::{buckal_log, buckal_note, user_agent, utils::UnwrapOrExit};
 
 pub const BUCK2_RELEASE_VERSION: &str = "2026-04-15";
-const BUCK2_RELEASE_DOWNLOAD_BASE: &str = "https://github.com/facebook/buck2/releases/download";
+const BUCK2_RELEASE_API_BASE: &str = "https://api.github.com/repos/facebook/buck2/releases/tags";
+const GITHUB_API_ACCEPT: &str = "application/vnd.github+json";
+const GITHUB_API_VERSION: &str = "2022-11-28";
+const BUCK2_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const BUCK2_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Parser, Debug)]
 pub struct SetupArgs {
@@ -74,6 +81,25 @@ struct Buck2Asset {
     archive_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Buck2Download {
+    archive_name: String,
+    url: String,
+    sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    assets: Vec<GithubReleaseAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReleaseAsset {
+    name: String,
+    browser_download_url: String,
+    digest: Option<String>,
+}
+
 pub fn execute(args: &SetupArgs) {
     match install_buck2_with_variant(args.yes, args.variant)
         .unwrap_or_exit_ctx("failed to install buck2")
@@ -125,22 +151,31 @@ fn install_buck2_from_assets(
 
     let client = Client::builder()
         .user_agent(user_agent())
+        .connect_timeout(BUCK2_CONNECT_TIMEOUT)
+        .timeout(BUCK2_DOWNLOAD_TIMEOUT)
         .build()
         .context("failed to create HTTP client")?;
+    let release = fetch_buck2_release(&client)?;
 
     let mut failures = Vec::new();
     for asset in assets {
-        let url = release_url(&asset.archive_name);
-        buckal_log!("Fetching", &url);
+        let download = match release_download_for(&release, asset) {
+            Ok(download) => download,
+            Err(error) => {
+                failures.push(format!("{}: {:#}", asset.archive_name, error));
+                continue;
+            }
+        };
+        buckal_log!("Fetching", &download.url);
         let _ = io::stdout().flush();
-        match download_and_install(&client, &url, destination) {
+        match download_and_install(&client, &download, destination) {
             Ok(action) => {
                 return Ok(InstallOutcome::Installed {
                     destination: destination.to_path_buf(),
                     action,
                 });
             }
-            Err(error) => failures.push(format!("{}: {:#}", url, error)),
+            Err(error) => failures.push(format!("{}: {:#}", download.url, error)),
         }
     }
 
@@ -160,9 +195,12 @@ fn confirm_overwrite(destination: &Path) -> Result<bool> {
     .map_err(|e| anyhow!("confirmation failed: {}", e))
 }
 
-fn download_and_install(client: &Client, url: &str, destination: &Path) -> Result<InstallAction> {
-    let mut response = client
-        .get(url)
+fn fetch_buck2_release(client: &Client) -> Result<GithubRelease> {
+    let url = release_api_url();
+    let response = client
+        .get(&url)
+        .header(ACCEPT, GITHUB_API_ACCEPT)
+        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
         .header(USER_AGENT, user_agent())
         .send()
         .map_err(|error| anyhow!("request to {} failed: {:?}", url, error))?;
@@ -177,30 +215,69 @@ fn download_and_install(client: &Client, url: &str, destination: &Path) -> Resul
         ));
     }
 
-    let content_length = response
-        .headers()
-        .get(CONTENT_LENGTH)
-        .and_then(|length| length.to_str().ok())
-        .and_then(|length| length.parse::<u64>().ok());
+    response
+        .json()
+        .with_context(|| format!("failed to parse GitHub release metadata from {url}"))
+}
 
+fn release_download_for(release: &GithubRelease, asset: &Buck2Asset) -> Result<Buck2Download> {
+    let release_asset = release
+        .assets
+        .iter()
+        .find(|release_asset| release_asset.name == asset.archive_name)
+        .ok_or_else(|| anyhow!("release asset {} was not found", asset.archive_name))?;
+
+    Ok(Buck2Download {
+        archive_name: asset.archive_name.clone(),
+        url: release_asset.browser_download_url.clone(),
+        sha256: parse_sha256_digest(&asset.archive_name, release_asset.digest.as_deref())?,
+    })
+}
+
+fn parse_sha256_digest(archive_name: &str, digest: Option<&str>) -> Result<String> {
+    let digest =
+        digest.ok_or_else(|| anyhow!("release asset {archive_name} is missing a digest"))?;
+    let (algorithm, value) = digest
+        .split_once(':')
+        .ok_or_else(|| anyhow!("release asset {archive_name} has invalid digest {digest}"))?;
+
+    if !algorithm.eq_ignore_ascii_case("sha256") {
+        return Err(anyhow!(
+            "release asset {archive_name} uses unsupported digest algorithm {algorithm}"
+        ));
+    }
+
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(anyhow!(
+            "release asset {archive_name} has invalid SHA-256 digest {digest}"
+        ));
+    }
+
+    Ok(value.to_ascii_lowercase())
+}
+
+fn download_and_install(
+    client: &Client,
+    download: &Buck2Download,
+    destination: &Path,
+) -> Result<InstallAction> {
     let temp_path = temporary_install_path(destination);
-    let decode_result = (|| -> Result<InstallAction> {
+    let archive_path = temporary_archive_path(&temp_path);
+    let install_result = (|| -> Result<InstallAction> {
+        download_archive(client, download, &archive_path)?;
+
+        let archive_file = fs::File::open(&archive_path)
+            .with_context(|| format!("failed to open {}", archive_path.display()))?;
         let temp_file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temp_path)
             .with_context(|| format!("failed to create {}", temp_path.display()))?;
 
-        let progress = download_progress_bar(content_length);
-        let download_result = {
-            let progress_reader = progress.wrap_read(&mut response);
-            match ruzstd::decoding::StreamingDecoder::new(progress_reader) {
-                Ok(mut decoder) => decode_to_file(&mut decoder, temp_file).map_err(Into::into),
-                Err(error) => Err(anyhow!("failed to start zstd decoder: {}", error)),
-            }
-        };
-        progress.finish_and_clear();
-        download_result?;
+        match ruzstd::decoding::StreamingDecoder::new(archive_file) {
+            Ok(mut decoder) => decode_to_file(&mut decoder, temp_file).map_err(Into::into),
+            Err(error) => Err(anyhow!("failed to start zstd decoder: {}", error)),
+        }?;
 
         set_executable(&temp_path)?;
         let action = install_action_for(destination);
@@ -208,11 +285,79 @@ fn download_and_install(client: &Client, url: &str, destination: &Path) -> Resul
         Ok(action)
     })();
 
-    if decode_result.is_err() {
+    let _ = fs::remove_file(&archive_path);
+    if install_result.is_err() {
         let _ = fs::remove_file(&temp_path);
     }
 
-    decode_result
+    install_result
+}
+
+fn download_archive(client: &Client, download: &Buck2Download, archive_path: &Path) -> Result<()> {
+    let mut response = client
+        .get(&download.url)
+        .header(USER_AGENT, user_agent())
+        .send()
+        .map_err(|error| anyhow!("request to {} failed: {:?}", download.url, error))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow!(
+            "{} returned HTTP {} from {}",
+            download.url,
+            status,
+            response.url()
+        ));
+    }
+
+    let content_length = response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|length| length.to_str().ok())
+        .and_then(|length| length.parse::<u64>().ok());
+
+    let archive_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(archive_path)
+        .with_context(|| format!("failed to create {}", archive_path.display()))?;
+
+    let progress = download_progress_bar(content_length);
+    let download_result = {
+        let mut progress_reader = progress.wrap_read(&mut response);
+        download_to_file_with_sha256(&mut progress_reader, archive_file)
+    };
+    progress.finish_and_clear();
+    let actual_sha256 = download_result?;
+
+    if actual_sha256 != download.sha256 {
+        return Err(anyhow!(
+            "checksum mismatch for {}: expected sha256:{}, got sha256:{}",
+            download.archive_name,
+            download.sha256,
+            actual_sha256
+        ));
+    }
+
+    Ok(())
+}
+
+fn download_to_file_with_sha256<R: Read>(reader: &mut R, mut file: fs::File) -> io::Result<String> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+
+    loop {
+        let bytes_read = reader.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        hasher.update(&buffer[..bytes_read]);
+        file.write_all(&buffer[..bytes_read])?;
+    }
+
+    file.sync_all()?;
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn decode_to_file<R: Read>(reader: &mut R, mut file: fs::File) -> io::Result<()> {
@@ -256,63 +401,24 @@ fn download_progress_bar(content_length: Option<u64>) -> ProgressBar {
 }
 
 fn default_buck2_destination() -> Result<PathBuf> {
-    let cargo_home = cargo_home()?;
-    Ok(buck2_destination_in(&cargo_home, env::consts::OS))
-}
-
-fn cargo_home() -> Result<PathBuf> {
-    if let Some(cargo_home) = non_empty_env("CARGO_HOME") {
-        return Ok(PathBuf::from(cargo_home));
-    }
-
-    Ok(home_dir()?.join(".cargo"))
-}
-
-fn home_dir() -> Result<PathBuf> {
-    if let Some(home) = non_empty_env("HOME") {
-        return Ok(PathBuf::from(home));
-    }
-
-    #[cfg(windows)]
-    {
-        if let Some(profile) = non_empty_env("USERPROFILE") {
-            return Ok(PathBuf::from(profile));
-        }
-
-        if let (Some(drive), Some(path)) = (non_empty_env("HOMEDRIVE"), non_empty_env("HOMEPATH")) {
-            return Ok(PathBuf::from(format!("{drive}{path}")));
-        }
-    }
-
-    Err(anyhow!(
-        "could not determine home directory; set CARGO_HOME to install buck2"
-    ))
-}
-
-fn non_empty_env(key: &str) -> Option<String> {
-    env::var(key).ok().filter(|value| !value.is_empty())
-}
-
-fn buck2_destination_in(cargo_home: &Path, os: &str) -> PathBuf {
-    cargo_home.join("bin").join(executable_name(os))
-}
-
-fn executable_name(os: &str) -> &'static str {
-    if os == "windows" {
+    let cargo_home =
+        home::cargo_home().context("could not determine Cargo home directory to install buck2")?;
+    let dest = cargo_home.join("bin").join(if consts::OS == "windows" {
         "buck2.exe"
     } else {
         "buck2"
-    }
+    });
+    Ok(dest)
 }
 
 fn buck2_assets_for_current_target(
     linux_variant: Option<LinuxLibcVariant>,
 ) -> Result<Vec<Buck2Asset>> {
-    buck2_assets_for(env::consts::OS, env::consts::ARCH, linux_variant).ok_or_else(|| {
+    buck2_assets_for(consts::OS, consts::ARCH, linux_variant).ok_or_else(|| {
         anyhow!(
             "unsupported platform or variant: {}-{}{}",
-            env::consts::OS,
-            env::consts::ARCH,
+            consts::OS,
+            consts::ARCH,
             linux_variant
                 .map(|variant| format!(" ({})", variant.as_target_env()))
                 .unwrap_or_default()
@@ -371,8 +477,8 @@ fn default_linux_variant() -> LinuxLibcVariant {
     }
 }
 
-fn release_url(archive_name: &str) -> String {
-    format!("{BUCK2_RELEASE_DOWNLOAD_BASE}/{BUCK2_RELEASE_VERSION}/{archive_name}")
+fn release_api_url() -> String {
+    format!("{BUCK2_RELEASE_API_BASE}/{BUCK2_RELEASE_VERSION}")
 }
 
 fn temporary_install_path(destination: &Path) -> PathBuf {
@@ -389,6 +495,14 @@ fn temporary_install_path(destination: &Path) -> PathBuf {
         std::process::id(),
         timestamp
     ))
+}
+
+fn temporary_archive_path(temp_path: &Path) -> PathBuf {
+    let file_name = temp_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(".buck2.tmp");
+    temp_path.with_file_name(format!("{file_name}.zst"))
 }
 
 #[cfg(unix)]
@@ -487,25 +601,90 @@ mod tests {
     }
 
     #[test]
-    fn builds_release_url_from_version_constant() {
+    fn builds_release_api_url_from_version_constant() {
         assert_eq!(
-            release_url("buck2-x86_64-unknown-linux-gnu.zst"),
+            release_api_url(),
             format!(
-                "https://github.com/facebook/buck2/releases/download/{BUCK2_RELEASE_VERSION}/buck2-x86_64-unknown-linux-gnu.zst"
+                "https://api.github.com/repos/facebook/buck2/releases/tags/{BUCK2_RELEASE_VERSION}"
             )
         );
     }
 
     #[test]
-    fn chooses_destination_binary_name_by_platform() {
-        let cargo_home = PathBuf::from("/home/example/.cargo");
+    fn builds_download_metadata_from_release_asset() {
+        let expected_sha256 = "a".repeat(64);
+        let release = GithubRelease {
+            assets: vec![GithubReleaseAsset {
+                name: "buck2-x86_64-unknown-linux-gnu.zst".to_string(),
+                browser_download_url: "https://example.com/buck2.zst".to_string(),
+                digest: Some(format!("sha256:{expected_sha256}")),
+            }],
+        };
+        let asset = Buck2Asset {
+            archive_name: "buck2-x86_64-unknown-linux-gnu.zst".to_string(),
+        };
+
+        let download = release_download_for(&release, &asset).expect("asset should resolve");
+
+        assert_eq!(download.archive_name, asset.archive_name);
+        assert_eq!(download.url, "https://example.com/buck2.zst");
+        assert_eq!(download.sha256, expected_sha256);
+    }
+
+    #[test]
+    fn rejects_release_asset_without_digest() {
+        let release = GithubRelease {
+            assets: vec![GithubReleaseAsset {
+                name: "buck2-x86_64-unknown-linux-gnu.zst".to_string(),
+                browser_download_url: "https://example.com/buck2.zst".to_string(),
+                digest: None,
+            }],
+        };
+        let asset = Buck2Asset {
+            archive_name: "buck2-x86_64-unknown-linux-gnu.zst".to_string(),
+        };
+
+        let error = release_download_for(&release, &asset).expect_err("missing digest should fail");
+
+        assert!(error.to_string().contains("missing a digest"));
+    }
+
+    #[test]
+    fn rejects_non_sha256_digest() {
+        let error = parse_sha256_digest(
+            "buck2.zst",
+            Some("sha1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        )
+        .expect_err("non-sha256 digest should fail");
+
+        assert!(error.to_string().contains("unsupported digest algorithm"));
+    }
+
+    #[test]
+    fn rejects_invalid_sha256_digest() {
+        let error = parse_sha256_digest("buck2.zst", Some("sha256:not-a-valid-hex-digest"))
+            .expect_err("invalid sha256 digest should fail");
+
+        assert!(error.to_string().contains("invalid SHA-256 digest"));
+    }
+
+    #[test]
+    fn writes_download_and_returns_sha256() {
+        let temp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let archive_path = temp_dir.path().join("asset.zst");
+        let archive_file = fs::File::create(&archive_path).expect("failed to create archive file");
+        let mut reader = &b"abc"[..];
+
+        let actual_sha256 =
+            download_to_file_with_sha256(&mut reader, archive_file).expect("hash should compute");
+
         assert_eq!(
-            buck2_destination_in(&cargo_home, "linux"),
-            PathBuf::from("/home/example/.cargo/bin/buck2")
+            actual_sha256,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         assert_eq!(
-            buck2_destination_in(&cargo_home, "windows"),
-            PathBuf::from("/home/example/.cargo/bin/buck2.exe")
+            fs::read(&archive_path).expect("archive file should exist"),
+            b"abc"
         );
     }
 
