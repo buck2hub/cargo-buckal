@@ -112,6 +112,22 @@ jobs:
           # Compare file contents
           echo "=== Checking file content consistency ==="
           CONTENT_FAILED=0
+          MAX_DIFF_LINES=200
+
+          print_content_diff() {
+            local left_label="$1"
+            local right_label="$2"
+            local left_file="$3"
+            local right_file="$4"
+
+            echo "--- Diff (first ${MAX_DIFF_LINES} lines) ---"
+            diff -u \
+              --label "$left_label" \
+              --label "$right_label" \
+              "$left_file" \
+              "$right_file" | head -n "$MAX_DIFF_LINES" || true
+            echo "------------"
+          }
 
           while IFS= read -r file; do
             if [ -z "$file" ]; then
@@ -121,14 +137,13 @@ jobs:
             linux_file="gen-linux/$file"
             macos_file="gen-macos/$file"
             windows_file="gen-windows/$file"
+            display_file="${file#./}"
 
             # Compare Linux vs macOS
             if [ -f "$linux_file" ] && [ -f "$macos_file" ]; then
               if ! diff -q "$linux_file" "$macos_file" > /dev/null 2>&1; then
-                echo "❌ Content differs: $file (Linux vs macOS)"
-                echo "--- Diff ---"
-                diff "$linux_file" "$macos_file" | head -50 || true
-                echo "------------"
+                echo "❌ Content differs: $display_file (Linux vs macOS)"
+                print_content_diff "gen-linux/$display_file" "gen-macos/$display_file" "$linux_file" "$macos_file"
                 CONTENT_FAILED=1
               fi
             fi
@@ -136,10 +151,8 @@ jobs:
             # Compare Linux vs Windows
             if [ -f "$linux_file" ] && [ -f "$windows_file" ]; then
               if ! diff -q "$linux_file" "$windows_file" > /dev/null 2>&1; then
-                echo "❌ Content differs: $file (Linux vs Windows)"
-                echo "--- Diff ---"
-                diff "$linux_file" "$windows_file" | head -50 || true
-                echo "------------"
+                echo "❌ Content differs: $display_file (Linux vs Windows)"
+                print_content_diff "gen-linux/$display_file" "gen-windows/$display_file" "$linux_file" "$windows_file"
                 CONTENT_FAILED=1
               fi
             fi
