@@ -25,7 +25,7 @@ jobs:
     uses: ./.github/workflows/_buck2-generate.yml
     with:
       project_name: libra
-      clone_url: https://github.com/web3infra-foundation/libra.git
+      clone_url: https://github.com/libra-tools/libra.git
       clone_ref: main
       clean_existing_buck2_and_buckal: true
 

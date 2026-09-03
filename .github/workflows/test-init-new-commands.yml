@@ -56,14 +56,15 @@ jobs:
             cargo-buckal -> target
           cache-all-crates: true
 
-      - name: Install Buck2
-        uses: ./cargo-buckal/.github/actions/install-buck2
-
       - name: Install cargo-buckal
         shell: bash
         run: |
           cd cargo-buckal
           cargo install --locked --path .
+
+      - name: Install Buck2
+        shell: bash
+        run: cargo buckal setup -y
 
       - name: Test cargo buckal init --repo
         shell: bash

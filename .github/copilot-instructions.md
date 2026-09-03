@@ -123,7 +123,6 @@ Pre-commit hooks enforce:
 
 **Custom GitHub Actions:**
 - `.github/actions/setup-rust-toolchains/`: Sets up stable Rust with clippy and rustfmt
-- `.github/actions/install-buck2/`: Installs Buck2 for integration tests
 - `.github/actions/setup_test_env/`: Sets up test environment with Python 3.11+
 
 **Key points for CI:**
