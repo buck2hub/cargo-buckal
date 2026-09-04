@@ -65,7 +65,7 @@ jobs:
       # Checkout cargo-buckal for reusable actions
       # ============================================================
       - name: Checkout cargo-buckal (for actions)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           path: cargo-buckal
@@ -75,7 +75,7 @@ jobs:
       # Checkout cargo-buckal source for installation
       # ============================================================
       - name: Checkout cargo-buckal (for installation)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           path: cargo-buckal-src

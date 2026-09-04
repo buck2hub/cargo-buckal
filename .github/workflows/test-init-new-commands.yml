@@ -38,7 +38,7 @@ jobs:
         run: echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cargo-target" >> "$GITHUB_ENV"
 
       - name: Checkout cargo-buckal
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           path: cargo-buckal
