@@ -65,6 +65,9 @@ pub enum BuckalSubCommands {
     /// Remove dependencies from a manifest file
     Remove(crate::commands::remove::RemoveArgs),
 
+    /// Download and install Buck2 into Cargo's bin directory
+    Setup(crate::commands::setup::SetupArgs),
+
     /// Execute unit and integration tests of a package
     Test(Box<crate::commands::test::TestArgs>),
 
@@ -94,6 +97,7 @@ impl Cli {
                         BuckalSubCommands::Patch(args) => commands::patch::execute(args),
                         BuckalSubCommands::Push(args) => commands::push::execute(args),
                         BuckalSubCommands::Remove(args) => commands::remove::execute(args),
+                        BuckalSubCommands::Setup(args) => commands::setup::execute(args),
                         BuckalSubCommands::Test(args) => commands::test::execute(args),
                         BuckalSubCommands::Update(args) => commands::update::execute(args),
                     },
@@ -239,5 +243,44 @@ mod tests {
                 other => panic!("expected patch subcommand, got {other:?}"),
             },
         }
+    }
+
+    #[test]
+    fn test_cli_setup_accepts_yes_flag() {
+        let cli = Cli::try_parse_from(["cargo", "buckal", "setup", "-y"])
+            .expect("failed to parse setup args with -y");
+
+        match cli.command {
+            Commands::Buckal(args) => match args.subcommands {
+                Some(BuckalSubCommands::Setup(setup_args)) => {
+                    assert!(setup_args.yes);
+                }
+                other => panic!("expected setup subcommand, got {other:?}"),
+            },
+        }
+    }
+
+    #[test]
+    fn test_cli_setup_accepts_linux_variant() {
+        let cli = Cli::try_parse_from(["cargo", "buckal", "setup", "--variant", "musl"])
+            .expect("failed to parse setup args with --variant musl");
+
+        match cli.command {
+            Commands::Buckal(args) => match args.subcommands {
+                Some(BuckalSubCommands::Setup(setup_args)) => {
+                    assert_eq!(
+                        setup_args.variant,
+                        Some(crate::commands::setup::LinuxLibcVariant::Musl)
+                    );
+                }
+                other => panic!("expected setup subcommand, got {other:?}"),
+            },
+        }
+    }
+
+    #[test]
+    fn test_cli_setup_rejects_invalid_linux_variant() {
+        let result = Cli::try_parse_from(["cargo", "buckal", "setup", "--variant", "glibc"]);
+        assert!(result.is_err());
     }
 }

@@ -26,7 +26,7 @@ jobs:
     uses: ./.github/workflows/_buck2-generate.yml
     with:
       project_name: git-internal
-      clone_url: https://github.com/web3infra-foundation/git-internal.git
+      clone_url: https://github.com/libra-tools/git-internal.git
       clone_ref: main
       clean_existing_buck2_and_buckal: true
 

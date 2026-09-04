@@ -1,6 +1,6 @@
 [package]
 name = "cargo-buckal"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 authors = ["jl.jiang <jiangjl9807@gmail.com>"]
 description = "Seamlessly build Cargo projects with Buck2."
@@ -18,39 +18,47 @@ categories = [
 ]
 
 [dependencies]
+allocative = "0.3.6"
+anyhow = "1.0.100"
+bincode-next = { version = "3.1.1", features = ["serde"] }
+bitflags = "2.10.0"
+blake3 = "1.8.2"
 cargo-platform = "0.3.0"
-cargo_metadata = "0.22.0"
+cargo-util-schemas = "0.14.2"
+cargo_metadata = "0.23.1"
 clap = { version = "4.5.41", features = ["derive"] }
+colored = "3.1.1"
+daggy = "0.9"
 fs_extra = "1.3.0"
+globset = "0.4.18"
+hex = "0.4.3"
+home = "0.5.12"
+include_dir = "0.7.4"
+indicatif = "0.18.3"
 indoc = "2.0.6"
+inquire = "0.9.4"
+itertools = "0.15.0"
+log = "0.4"
+phf = { version = "0.14.0", features = ["macros"] }
+regex = "1.11.2"
+reqwest = { version = "0.13.4", features = ["json", "blocking", "query"] }
 rust-ini = "0.21"
-itertools = "0.14.0"
+ruzstd = "0.9.0"
 semver = "1.0.26"
 serde = "1.0.219"
 serde_derive = "1.0.219"
-serde_starlark = "0.1.17"
-starlark_syntax = "0.13"
-colored = "2.0"
-inquire = "0.7.5"
-toml = "0.8"
 serde_json = "1.0.143"
-bincode = { version = "2.0.1", features = ["serde"] }
-blake3 = "1.8.2"
-daggy = "0.9"
-regex = "1.11.2"
-anyhow = "1.0.100"
-reqwest = { version = "0.12.24", features = ["json", "blocking"] }
-walkdir = "2.5.0"
-hex = "0.4.3"
-bitflags = "2.10.0"
-phf = { version = "0.13.1", features = ["macros"] }
-toml_edit = "0.22"
-log = "0.4"
-include_dir = "0.7.4"
-sha1 = "0.10.6"
-cargo-util-schemas = "0.12.0"
+serde_starlark = "0.1.17"
+sha1 = "0.11.0"
+sha2 = "0.11.0"
+starlark_syntax = "0.14.2"
+toml = "1.1.5"
+toml_edit = "0.25.13"
 url = "2.5.8"
-globset = "0.4.18"
+walkdir = "2.5.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 tempfile = "3"

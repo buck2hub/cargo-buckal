@@ -4,7 +4,6 @@ use cargo_metadata::camino::Utf8Path;
 use serde::ser::{Serialize, SerializeStruct, SerializeTupleStruct, Serializer};
 use serde_derive::Serialize;
 use starlark_syntax::syntax::ast::{ArgumentP, AstExpr, AstNoPayload, AstStmt, ExprP, Stmt};
-use starlark_syntax::syntax::module::AstModuleFields;
 use starlark_syntax::syntax::{AstModule, Dialect};
 
 use crate::buckal_error;

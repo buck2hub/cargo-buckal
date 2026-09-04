@@ -20,7 +20,7 @@ cargo install --git https://github.com/buck2hub/cargo-buckal.git
 
 > [!NOTE]
 >
-> Buckal requires [Buck2](https://buck2.build/). Please ensure it's installed on your system before proceeding.
+> Buckal requires [Buck2](https://buck2.build/). You can install it with `cargo buckal setup`.
 
 ## Usage
 
@@ -31,6 +31,7 @@ Common commands:
 - `cargo buckal init|new`: Create a new package or a Buck2 project in the directory.
 - `cargo buckal migrate`: Migrate an existing Cargo project to Buck2 (generate/update BUCK files).
 - `cargo buckal add|remove|update|patch`: Manage dependencies, applying the changes to both `Cargo.toml`/`buckal.toml` and `BUCK` files.
+- `cargo buckal setup`: Download Buck2 from GitHub releases into `~/.cargo/bin` (`--variant gnu|musl` on Linux).
 - `cargo buckal build`: Build the current package with Buck2.
 - `cargo buckal test`: Compile and execute unit and integration tests with Buck2.
 - `cargo buckal clean`: Remove `buck-out` directory.

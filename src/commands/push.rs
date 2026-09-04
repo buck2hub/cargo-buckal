@@ -132,7 +132,7 @@ pub fn execute(args: &PushArgs) {
                     let response: SessionFileResponse = client
                         .post(format!(
                             "{}/api/v1/buck/session/{}/file",
-                            registry.api, &cl_link
+                            registry.api, cl_link
                         ))
                         .body(file_content)
                         .header(AUTHORIZATION, format!("Bearer {}", token))
