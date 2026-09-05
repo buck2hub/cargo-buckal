@@ -476,7 +476,12 @@ fn test_diamond_deps_version_conflict() {
     assert!(found_new.version.starts_with("1."));
 
     // Fingerprints of the two itoa versions must differ
-    let ws_root = Utf8PathBuf::from("/tmp");
+    let ws_root = Utf8PathBuf::from(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/diamond-deps")
+            .to_str()
+            .unwrap(),
+    );
     assert_ne!(
         resolve.fingerprint_of(
             &itoa_old_node.package_id,

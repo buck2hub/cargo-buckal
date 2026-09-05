@@ -463,6 +463,20 @@ pub fn get_vendor_dir(package_id: &PackageId) -> Result<Utf8PathBuf> {
     Ok(get_buck2_root()?.join(get_vendor_path_relative(package_id)?))
 }
 
+/// Whether a package id refers to a local path source — a workspace member or
+/// any `path = "..."` dependency.
+///
+/// Such packages live in the user's own source tree, not in a vendor
+/// directory, so buckal never vendors or removes them ([`get_vendor_dir`]
+/// rejects them as an unsupported source kind). Callers classify removals this
+/// way rather than string-matching the workspace-root prefix, which is fragile:
+/// a path-source id embeds the root as a `file://` URL (forward slashes,
+/// percent-encoding), not the native path.
+pub fn is_path_source(package_id: &PackageId) -> Result<bool> {
+    let spec = PackageIdSpec::parse(&package_id.repr)?;
+    Ok(matches!(spec.kind(), Some(SourceKind::Path)))
+}
+
 /// Retrieve the last saved BuckalCache from the cache file, or rebuild from metadata if unavailable.
 ///
 /// `manifest_path` should match the `--manifest-path` argument passed to the command,
@@ -669,6 +683,46 @@ mod tests {
         assert!(!is_valid_rustc_target(""));
         assert!(!is_valid_rustc_target("x86_64"));
         assert!(!is_valid_rustc_target("linux"));
+    }
+
+    #[test]
+    fn test_is_path_source_classifies_removed_ids() {
+        // URL-form path ids — what `PackageId::resolve` now produces. These are
+        // exactly the shapes the old native-path `skip_pattern` failed to match.
+        assert!(
+            is_path_source(&PackageId {
+                repr: "path+file:///C:/repo#0.1.0".to_string(),
+            })
+            .unwrap()
+        );
+        assert!(
+            is_path_source(&PackageId {
+                repr: "path+file:///C:/repo/crates/foo#0.1.0".to_string(),
+            })
+            .unwrap()
+        );
+        // A workspace path that needs percent-encoding (space in a dir name).
+        assert!(
+            is_path_source(&PackageId {
+                repr: "path+file:///C:/Code/Jane%20Doe/repo/crates/foo#0.1.0".to_string(),
+            })
+            .unwrap()
+        );
+
+        // Vendorable sources must not be skipped on removal.
+        assert!(
+            !is_path_source(&PackageId {
+                repr: "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.0"
+                    .to_string(),
+            })
+            .unwrap()
+        );
+        assert!(
+            !is_path_source(&PackageId {
+                repr: "git+https://github.com/foo/bar?rev=abc#bar@0.1.0".to_string(),
+            })
+            .unwrap()
+        );
     }
 
     #[test]

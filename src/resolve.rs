@@ -494,9 +494,35 @@ impl BuckalResolve {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use url::Url;
+
+    // Synthetic fixture paths that are absolute *on the host OS*, so they
+    // round-trip through `Url::from_file_path` the way a real `workspace_root`
+    // from `cargo metadata` does. (These fixtures previously used POSIX-only
+    // literals like `/tmp` and `/home/alice/project`, which aren't absolute on
+    // Windows and so can't be turned into a `file://` URL there.)
+    #[cfg(windows)]
+    const FIXTURE_BASE: &str = r"C:\buckal-fixture";
+    #[cfg(not(windows))]
+    const FIXTURE_BASE: &str = "/buckal-fixture";
+
+    fn fixture_path(rel: &str) -> Utf8PathBuf {
+        let mut p = Utf8PathBuf::from(FIXTURE_BASE);
+        p.push(rel);
+        p
+    }
+
+    /// A synthetic checkout location plus the `path+file://…` package-id prefix
+    /// Cargo emits for crates under it: `(native_root, id_prefix)`.
+    fn checkout(rel: &str) -> (Utf8PathBuf, String) {
+        let root = fixture_path(rel);
+        let url =
+            Url::from_file_path(root.as_std_path()).expect("fixture path must be host-absolute");
+        (root, format!("path+{url}"))
+    }
 
     fn test_workspace_root() -> Utf8PathBuf {
-        Utf8PathBuf::from("/tmp")
+        fixture_path("workspace")
     }
 
     fn make_pkg_id(name: &str) -> PackageId {
@@ -525,7 +551,7 @@ mod tests {
             features: vec![],
             kind: NodeKind::ThirdParty,
             edition: Edition::E2021,
-            manifest_path: Utf8PathBuf::from(format!("/tmp/{}/Cargo.toml", name)),
+            manifest_path: fixture_path(name).join("Cargo.toml"),
             targets: vec![],
             source: Some("registry+https://github.com/rust-lang/crates.io-index".to_string()),
             links: None,
@@ -1199,70 +1225,50 @@ mod tests {
     /// First-party nodes at different checkout locations should produce identical fingerprints.
     #[test]
     fn test_fingerprint_portable_across_paths() {
-        // Node checked out at /home/alice/project
-        let alice_root = Utf8PathBuf::from("/home/alice/project");
-        let mut node_alice = BuckalNode {
-            package_id: PackageId {
-                repr: "path+file:///home/alice/project#foo@1.0.0".to_string(),
-            },
-            name: "foo".to_string(),
-            version: "1.0.0".to_string(),
-            features: vec![],
-            kind: NodeKind::FirstParty {
-                relative_path: "".to_string(),
-            },
-            edition: Edition::E2021,
-            manifest_path: Utf8PathBuf::from("/home/alice/project/Cargo.toml"),
-            targets: vec![BuckalTarget {
+        // The same first-party crate, checked out at two different locations,
+        // must fingerprint identically (the workspace prefix is stripped to
+        // `($WORKSPACE)` and `src_path` is relativized against the manifest dir).
+        fn build(root: &Utf8PathBuf, id_prefix: &str) -> (BuckalResolve, PackageId) {
+            let pkg_id = PackageId {
+                repr: format!("{id_prefix}#foo@1.0.0"),
+            };
+            let node = BuckalNode {
+                package_id: pkg_id.clone(),
                 name: "foo".to_string(),
-                kind: vec![TargetKind::Lib],
-                src_path: Utf8PathBuf::from("/home/alice/project/src/lib.rs"),
-                doctest: true,
-                test: true,
-            }],
-            source: None,
-            links: None,
-            checksum: None,
-        };
+                version: "1.0.0".to_string(),
+                features: vec![],
+                kind: NodeKind::FirstParty {
+                    relative_path: String::new(),
+                },
+                edition: Edition::E2021,
+                manifest_path: root.join("Cargo.toml"),
+                targets: vec![BuckalTarget {
+                    name: "foo".to_string(),
+                    kind: vec![TargetKind::Lib],
+                    src_path: root.join("src").join("lib.rs"),
+                    doctest: true,
+                    test: true,
+                }],
+                source: None,
+                links: None,
+                checksum: None,
+            };
+            let mut dag = Dag::<BuckalNode, BuckalDep, u32>::new();
+            let mut index_map = HashMap::new();
+            let idx = dag.add_node(node);
+            index_map.insert(pkg_id.clone(), idx);
+            (BuckalResolve { dag, index_map }, pkg_id)
+        }
 
-        let mut dag1 = Dag::<BuckalNode, BuckalDep, u32>::new();
-        let mut map1 = HashMap::new();
-        let idx1 = dag1.add_node(node_alice.clone());
-        map1.insert(node_alice.package_id.clone(), idx1);
-        let resolve1 = BuckalResolve {
-            dag: dag1,
-            index_map: map1,
-        };
+        let (alice_root, alice_prefix) = checkout("alice/project");
+        let (bob_root, bob_prefix) = checkout("bob/work/project");
 
-        // Same node checked out at /home/bob/work/project
-        let bob_root = Utf8PathBuf::from("/home/bob/work/project");
-        node_alice.package_id = PackageId {
-            repr: "path+file:///home/bob/work/project#foo@1.0.0".to_string(),
-        };
-        node_alice.manifest_path = Utf8PathBuf::from("/home/bob/work/project/Cargo.toml");
-        node_alice.targets[0].src_path = Utf8PathBuf::from("/home/bob/work/project/src/lib.rs");
+        let (resolve_alice, id_alice) = build(&alice_root, &alice_prefix);
+        let (resolve_bob, id_bob) = build(&bob_root, &bob_prefix);
 
-        let mut dag2 = Dag::<BuckalNode, BuckalDep, u32>::new();
-        let mut map2 = HashMap::new();
-        let idx2 = dag2.add_node(node_alice.clone());
-        map2.insert(node_alice.package_id.clone(), idx2);
-        let resolve2 = BuckalResolve {
-            dag: dag2,
-            index_map: map2,
-        };
-
-        let fp_alice = resolve1.fingerprint_of(
-            &PackageId {
-                repr: "path+file:///home/alice/project#foo@1.0.0".to_string(),
-            },
-            &alice_root,
-            &RepoPatchConfig::default(),
-        );
-        let fp_bob = resolve2.fingerprint_of(
-            &node_alice.package_id,
-            &bob_root,
-            &RepoPatchConfig::default(),
-        );
+        let fp_alice =
+            resolve_alice.fingerprint_of(&id_alice, &alice_root, &RepoPatchConfig::default());
+        let fp_bob = resolve_bob.fingerprint_of(&id_bob, &bob_root, &RepoPatchConfig::default());
 
         assert_eq!(
             fp_alice, fp_bob,
@@ -1381,8 +1387,8 @@ mod tests {
             (node, Utf8PathBuf::from(format!("{}/project", cargo_home)))
         };
 
-        let (node1, root1) = make_third_party("/home/alice");
-        let (node2, root2) = make_third_party("/home/bob");
+        let (node1, root1) = make_third_party(fixture_path("alice").as_str());
+        let (node2, root2) = make_third_party(fixture_path("bob").as_str());
 
         let mut dag1 = Dag::<BuckalNode, BuckalDep, u32>::new();
         let mut map1 = HashMap::new();
