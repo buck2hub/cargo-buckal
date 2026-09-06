@@ -12,7 +12,7 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use inquire::Confirm;
 use reqwest::{
     blocking::Client,
-    header::{ACCEPT, CONTENT_LENGTH, USER_AGENT},
+    header::{ACCEPT, AUTHORIZATION, CONTENT_LENGTH, HeaderMap, USER_AGENT},
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -23,6 +23,11 @@ pub const BUCK2_RELEASE_VERSION: &str = "2026-04-15";
 const BUCK2_RELEASE_API_BASE: &str = "https://api.github.com/repos/facebook/buck2/releases/tags";
 const GITHUB_API_ACCEPT: &str = "application/vnd.github+json";
 const GITHUB_API_VERSION: &str = "2022-11-28";
+/// Environment variables consulted for a GitHub token, in order.
+///
+/// `GITHUB_TOKEN` is what Actions exposes; `GH_TOKEN` is the `gh` CLI's
+/// convention and is what a developer is most likely to already have set.
+const GITHUB_TOKEN_VARS: [&str; 2] = ["GITHUB_TOKEN", "GH_TOKEN"];
 const BUCK2_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const BUCK2_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -195,18 +200,83 @@ fn confirm_overwrite(destination: &Path) -> Result<bool> {
     .map_err(|e| anyhow!("confirmation failed: {}", e))
 }
 
+/// A GitHub token from the environment, if one is set to something non-empty.
+fn github_token() -> Option<String> {
+    select_token(|name| std::env::var(name).ok())
+}
+
+/// The first candidate variable that holds a usable token.
+///
+/// Each candidate is normalized *before* it is accepted, so a variable that is
+/// present but blank falls through to the next one rather than shadowing it.
+/// That case is the motivating one, not a curiosity: CI frequently exports an
+/// empty `GITHUB_TOKEN` for jobs that were never granted one, and a developer on
+/// the same machine may have a perfectly good `GH_TOKEN`.
+///
+/// Takes its lookup as an argument so the choice can be tested without mutating
+/// the process environment, which is both unsafe and shared across parallel
+/// tests.
+fn select_token(lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
+    GITHUB_TOKEN_VARS
+        .iter()
+        .find_map(|name| normalize_token(lookup(name)))
+}
+
+/// A variable that is set but blank is the same as unset — CI commonly exports
+/// an empty `GITHUB_TOKEN` for jobs that were never given one, and sending
+/// `Authorization: Bearer ` is worse than sending nothing.
+fn normalize_token(raw: Option<String>) -> Option<String> {
+    raw.map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+/// Whether a failed response says the caller has no requests left.
+///
+/// GitHub reports an exhausted quota as 403 (or 429) with this header at zero,
+/// which is what distinguishes it from a 403 for any other reason.
+fn is_rate_limited(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-ratelimit-remaining")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.trim() == "0")
+}
+
 fn fetch_buck2_release(client: &Client) -> Result<GithubRelease> {
     let url = release_api_url();
-    let response = client
+    let mut request = client
         .get(&url)
         .header(ACCEPT, GITHUB_API_ACCEPT)
         .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
-        .header(USER_AGENT, user_agent())
+        .header(USER_AGENT, user_agent());
+
+    // Unauthenticated requests to api.github.com get a small hourly quota, and
+    // it is charged to the caller's address — which CI runners share — so a job
+    // installing Buck2 can fail for reasons that have nothing to do with the
+    // repository. Authenticating moves the quota to the token's owner and
+    // raises it substantially. Only the metadata request is authenticated: the
+    // asset download goes to a separate host and needs no credential.
+    //
+    // Current limits: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+    if let Some(token) = github_token() {
+        request = request.header(AUTHORIZATION, format!("Bearer {token}"));
+    }
+
+    let response = request
         .send()
         .map_err(|error| anyhow!("request to {} failed: {:?}", url, error))?;
 
     let status = response.status();
     if !status.is_success() {
+        if is_rate_limited(response.headers()) && github_token().is_none() {
+            return Err(anyhow!(
+                "{} returned HTTP {}: the unauthenticated GitHub API rate limit is \
+                 exhausted for this address. Set GITHUB_TOKEN or GH_TOKEN to \
+                 authenticate the release lookup — in GitHub Actions, add \
+                 `env:` `GITHUB_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}` to the step.",
+                url,
+                status
+            ));
+        }
         return Err(anyhow!(
             "{} returned HTTP {} from {}",
             url,
@@ -718,5 +788,73 @@ mod tests {
 
         fs::write(&destination, b"old buck2").expect("failed to write destination");
         assert_eq!(install_action_for(&destination), InstallAction::Replacing);
+    }
+
+    #[test]
+    fn a_blank_token_is_treated_as_absent() {
+        assert_eq!(normalize_token(None), None);
+        assert_eq!(normalize_token(Some(String::new())), None);
+        assert_eq!(normalize_token(Some("   ".to_owned())), None);
+        assert_eq!(normalize_token(Some("  \n".to_owned())), None);
+        assert_eq!(
+            normalize_token(Some("  ghp_example  ".to_owned())),
+            Some("ghp_example".to_owned()),
+            "surrounding whitespace comes from shell interpolation, not the token"
+        );
+    }
+
+    #[test]
+    fn a_blank_candidate_does_not_shadow_a_usable_one() {
+        let lookup = |vars: &[(&str, &str)]| {
+            let owned: Vec<(String, String)> = vars
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect();
+            move |name: &str| {
+                owned
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.clone())
+            }
+        };
+
+        assert_eq!(
+            select_token(lookup(&[("GITHUB_TOKEN", "  "), ("GH_TOKEN", "ghp_real")])),
+            Some("ghp_real".to_owned()),
+            "a blank GITHUB_TOKEN must fall through to GH_TOKEN, not suppress it"
+        );
+        assert_eq!(
+            select_token(lookup(&[
+                ("GITHUB_TOKEN", "ghp_first"),
+                ("GH_TOKEN", "ghp_second")
+            ])),
+            Some("ghp_first".to_owned()),
+            "GITHUB_TOKEN wins when both are usable"
+        );
+        assert_eq!(
+            select_token(lookup(&[("GH_TOKEN", "ghp_only")])),
+            Some("ghp_only".to_owned())
+        );
+        assert_eq!(
+            select_token(lookup(&[("GITHUB_TOKEN", ""), ("GH_TOKEN", "   ")])),
+            None,
+            "all blank is the same as none set"
+        );
+        assert_eq!(select_token(lookup(&[])), None);
+    }
+
+    #[test]
+    fn rate_limiting_is_read_from_the_remaining_header() {
+        let mut headers = HeaderMap::new();
+        assert!(
+            !is_rate_limited(&headers),
+            "a 403 with no quota header is some other kind of 403"
+        );
+
+        headers.insert("x-ratelimit-remaining", "17".parse().unwrap());
+        assert!(!is_rate_limited(&headers));
+
+        headers.insert("x-ratelimit-remaining", "0".parse().unwrap());
+        assert!(is_rate_limited(&headers));
     }
 }

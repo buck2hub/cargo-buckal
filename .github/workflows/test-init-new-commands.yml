@@ -64,6 +64,14 @@ jobs:
 
       - name: Install Buck2
         shell: bash
+        env:
+          # Unauthenticated requests to api.github.com share a small
+          # per-address quota with every other job on the runner, so the
+          # release lookup can fail with HTTP 403 for reasons unrelated
+          # to this repository. The workflow token carries its own,
+          # larger quota.
+          # https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cargo buckal setup -y
 
       - name: Test cargo buckal init --repo
